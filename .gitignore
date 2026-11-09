@@ -1,0 +1,55 @@
+# Operating System Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE & Editor
+.idea/
+.vscode/
+*.iml
+*.iws
+*.ipr
+
+# Node.js Backend
+backend/node_modules/
+backend/.env
+backend/.env.local
+backend/*.log
+backend/npm-debug.log*
+backend/yarn-debug.log*
+backend/yarn-error.log*
+
+# Flutter & Dart Frontend
+kiddo_app/.dart_tool/
+kiddo_app/.flutter-plugins
+kiddo_app/.flutter-plugins-dependencies
+kiddo_app/.pub/
+kiddo_app/.pub-cache/
+kiddo_app/build/
+kiddo_app/coverage/
+
+# Android
+kiddo_app/android/.gradle/
+kiddo_app/android/local.properties
+kiddo_app/android/app/build/
+kiddo_app/android/app/debug/
+kiddo_app/android/app/profile/
+kiddo_app/android/app/release/
+kiddo_app/android/*.apk
+kiddo_app/android/*.aab
+
+# iOS
+kiddo_app/ios/Pods/
+kiddo_app/ios/.symlinks/
+kiddo_app/ios/Flutter/Flutter.framework
+kiddo_app/ios/Flutter/Flutter.podspec
+kiddo_app/ios/Flutter/Generated.xcconfig
+kiddo_app/ios/Flutter/app.flx
+kiddo_app/ios/Flutter/app.zip
+kiddo_app/ios/Flutter/flutter_assets/
+kiddo_app/ios/ServiceDefinitions.json
+kiddo_app/ios/Runner/GeneratedPluginRegistrant.*
