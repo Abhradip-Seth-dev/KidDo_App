@@ -1,0 +1,437 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 1. USER & AUTHENTICATION
+// ─────────────────────────────────────────────────────────────────────────────
+model User {
+  id                     String    @id @default(uuid())
+  name                   String
+  email                  String    @unique
+  passwordHash           String?
+  googleId               String?
+  avatarUrl              String    @default("assets/images/kido_character.png")
+  age                    Int       @default(8)
+  gradeClass             String    @default("Class 3")
+  hasCompletedOnboarding Boolean   @default(false)
+
+  // RBAC & Account Controls
+  role                   String    @default("student")
+  isBanned               Boolean   @default(false)
+  forceLogoutBefore      DateTime?
+  deviceType             String    @default("iOS/Android")
+  appVersion             String    @default("1.0.0")
+  lastLoginAt            DateTime  @default(now())
+
+  // Gamification Metrics
+  iq                     Int       @default(0)
+  coins                  Int       @default(0)
+  streak                 Int       @default(0)
+  longestStreak          Int       @default(0)
+  lastActiveDate         DateTime?
+  totalQuizzesCompleted  Int       @default(0)
+  totalGamesPlayed       Int       @default(0)
+  completedUnits         String[]  @default([])
+  currentUnitBySubject   Json      @default("{\"Math\":1,\"GK\":1,\"English\":1,\"Computer\":1}")
+  completedQuizzes       Json      @default("[]")
+
+  // Shop & Inventory
+  ownedItemIds           String[]  @default([])
+  activeTheme            String    @default("default")
+  activeAvatar           String    @default("")
+  streakFreezes          Int       @default(1)
+  hasFeedSubscription    Boolean   @default(false)
+
+  // Habit & Parent Spectator Metrics
+  learningMinutesToday   Int       @default(0)
+  weeklyActivityMinutes  Int[]     @default([15, 20, 10, 25, 30, 0, 15])
+  parentPin              String    @default("1234")
+
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  levelProgress          LevelProgress[]
+  quizAttempts           QuizAttempt[]
+  gameProgress           GameProgress[]
+  gameAttempts           GameAttempt[]
+  adaptiveProfile        AdaptiveProfile?
+  dailyChallenges        DailyChallenge[]
+  sentFriendships        Friendship[] @relation("FriendshipRequester")
+  receivedFriendships    Friendship[] @relation("FriendshipRecipient")
+  socialPosts            SocialPost[]
+
+  @@index([role])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 2. QUIZ & ACADEMIC CONTENT
+// ─────────────────────────────────────────────────────────────────────────────
+model QuizQuestion {
+  id           String   @id @default(uuid())
+  subject      String
+  gradeClass   String   @default("Class 3")
+  chapter      String   @default("Chapter 1")
+  unitNumber   Int
+  unitName     String
+  quizName     String
+  question     String
+  type         String   @default("MCQ")
+  options      String[]
+  correctAnswer String
+  correctIndex Int
+  imageAsset   String?
+  explanation  String?
+  difficulty   String   @default("easy")
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([subject, unitNumber, quizName])
+  @@index([gradeClass])
+}
+
+model LevelProgress {
+  id          String    @id @default(uuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  levelId     String
+  subject     String
+  status      String    @default("locked")
+  stars       Int       @default(0)
+  completedAt DateTime?
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([userId, levelId])
+}
+
+model QuizAttempt {
+  id             String   @id @default(uuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subject        String
+  score          Int
+  correctCount   Int
+  totalQuestions Int      @default(5)
+  iqEarned       Int      @default(0)
+  coinsEarned    Int      @default(0)
+  completedAt    DateTime @default(now())
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([userId])
+  @@index([subject])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 3. PROGRESSIVE GAMES
+// ─────────────────────────────────────────────────────────────────────────────
+model Game {
+  id             String   @id @default(uuid())
+  gameKey        String   @unique
+  title          String
+  description    String
+  emoji          String
+  category       String   @default("10 Levels")
+  color          String   @default("#38bdf8")
+  gradientColors String[] @default(["#6C63FF", "#9B59B6"])
+  totalLevels    Int      @default(10)
+  order          Int      @default(1)
+  isActive       Boolean  @default(true)
+
+  progress       GameProgress[]
+  attempts       GameAttempt[]
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model GameProgress {
+  id              String    @id @default(uuid())
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  gameKey         String
+  game            Game      @relation(fields: [gameKey], references: [gameKey], onDelete: Cascade)
+  levelNumber     Int
+  stars           Int       @default(0)
+  bestScore       Int       @default(0)
+  bestMoves       Int?
+  bestTimeSeconds Float?
+  isCompleted     Boolean   @default(false)
+  isUnlocked      Boolean   @default(false)
+  completedAt     DateTime?
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([userId, gameKey, levelNumber])
+  @@index([userId, gameKey])
+}
+
+model GameAttempt {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  gameKey     String
+  game        Game     @relation(fields: [gameKey], references: [gameKey], onDelete: Cascade)
+  levelNumber Int
+  stars       Int
+  score       Int      @default(0)
+  moves       Int?
+  timeSeconds Float?
+  iqEarned    Int      @default(0)
+  coinsEarned Int      @default(0)
+  completedAt DateTime @default(now())
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId])
+  @@index([userId, createdAt])
+}
+
+model MathPuzzleLevel {
+  id          String   @id @default(uuid())
+  levelNumber Int      @unique
+  title       String
+  description String
+  icon        String
+  puzzles     Json
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model WordScrambleLevel {
+  id          String   @id @default(uuid())
+  levelNumber Int      @unique
+  title       String
+  description String
+  icon        String
+  puzzles     Json
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model MemoryMatchLevel {
+  id          String   @id @default(uuid())
+  levelNumber Int      @unique
+  title       String
+  description String
+  icon        String
+  config      Json
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 4. SHOP & REWARDS
+// ─────────────────────────────────────────────────────────────────────────────
+model ShopItem {
+  id          String   @id
+  name        String
+  description String
+  imageAsset  String
+  coinCost    Int
+  category    String
+  emoji       String   @default("⭐")
+  isActive    Boolean  @default(true)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([category])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 5. AI ENGINE & ADAPTIVE LEARNING
+// ─────────────────────────────────────────────────────────────────────────────
+model AdaptiveProfile {
+  id                        String   @id @default(uuid())
+  userId                    String   @unique
+  user                      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  consecutiveFastCorrect    Int      @default(0)
+  consecutiveIncorrect      Int      @default(0)
+  currentAdaptiveDifficulty String   @default("beginner")
+  mistakeHistory            Json     @default("[]")
+  strongTopics              String[] @default([])
+  weakTopics                String[] @default([])
+  totalQuestionsAnswered    Int      @default(0)
+  totalCorrectAnswered      Int      @default(0)
+  avgResponseTimeSeconds    Float    @default(8.0)
+  lastMascotSuggestion      Json     @default("{\"title\":\"Let's learn something new!\",\"message\":\"Keep up your great streak today! You are mastering your lessons.\",\"suggestedSubject\":\"Math\",\"suggestedUnit\":1}")
+
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 6. SOCIAL & ENGAGEMENT
+// ─────────────────────────────────────────────────────────────────────────────
+model DailyChallenge {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  dateKey      String
+  taskId       String
+  taskTitle    String
+  description  String
+  category     String   @default("quiz")
+  subject      String   @default("General")
+  targetCount  Int      @default(3)
+  currentCount Int      @default(0)
+  weight       Float    @default(1.0)
+  iqReward     Int      @default(20)
+  coinReward   Int      @default(10)
+  isCompleted  Boolean  @default(false)
+  isClaimed    Boolean  @default(false)
+  mascotEmoji  String   @default("🐘")
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([userId, dateKey])
+}
+
+model Friendship {
+  id          String   @id @default(uuid())
+  requesterId String
+  requester   User     @relation("FriendshipRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  recipientId String
+  recipient   User     @relation("FriendshipRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  status      String   @default("pending")
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([requesterId, recipientId])
+  @@index([requesterId])
+  @@index([recipientId])
+  @@index([status])
+}
+
+model SocialPost {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userName     String
+  avatarUrl    String   @default("assets/images/kido_character.png")
+  gradeClass   String   @default("Class 3")
+  activityType String
+  title        String
+  caption      String   @default("")
+  badgeEmoji   String   @default("🏆")
+  likes        String[] @default([])
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model CoopQuest {
+  id           String   @id @default(uuid())
+  gradeClass   String
+  title        String
+  description  String
+  subject      String   @default("Math")
+  targetCount  Int      @default(500)
+  currentCount Int      @default(0)
+  rewardBadge  String   @default("🌟 Math Legend")
+  rewardCoins  Int      @default(100)
+  rewardIq     Int      @default(200)
+  expiresAt    DateTime
+  completed    Boolean  @default(false)
+  contributors Json     @default("[]")
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([gradeClass])
+}
+
+model Contest {
+  id               String   @id @default(uuid())
+  title            String
+  monthYear        String
+  gradeClass       String
+  entryCoinCost    Int      @default(20)
+  registrationOpen Boolean  @default(true)
+  stages           Json     @default("[]")
+  participants     Json     @default("[]")
+  prizePool        Json     @default("{\"first\":{\"iq\":500,\"coins\":250,\"badge\":\"🥇 Arena Champion\"},\"second\":{\"iq\":300,\"coins\":150,\"badge\":\"🥈 Arena Master\"},\"third\":{\"iq\":200,\"coins\":100,\"badge\":\"🥉 Arena Elite\"}}")
+  active           Boolean  @default(true)
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([gradeClass])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 7. AUDIT & SYSTEM CONTROLS
+// ─────────────────────────────────────────────────────────────────────────────
+model AuditLog {
+  id         String   @id @default(uuid())
+  adminId    String
+  adminEmail String
+  adminRole  String   @default("admin")
+  action     String
+  resource   String
+  resourceId String?
+  details    Json     @default("{}")
+  ipAddress  String   @default("127.0.0.1")
+
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([action])
+  @@index([resource])
+  @@index([createdAt])
+}
+
+model SystemConfig {
+  id                     String   @id @default(uuid())
+  key                    String   @unique @default("global_settings")
+  doubleXpEnabled        Boolean  @default(false)
+  baseXpMultiplier       Float    @default(1.0)
+  bossBattleXpMultiplier Float    @default(1.5)
+  doubleXpTitle          String   @default("Double XP Weekend")
+  streakReminderEnabled  Boolean  @default(true)
+  streakReminderHour     Int      @default(20)
+  inactivityThresholdDays Int     @default(3)
+  updatedBy              String?
+
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+}
+
+model BroadcastMessage {
+  id          String    @id @default(uuid())
+  title       String
+  message     String
+  type        String    @default("info")
+  targetClass String    @default("All")
+  active      Boolean   @default(true)
+  startDate   DateTime  @default(now())
+  endDate     DateTime?
+  createdBy   String?
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([active, createdAt])
+}
