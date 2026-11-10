@@ -6,25 +6,30 @@ const errorHandler = (err, req, res, _next) => {
   let statusCode = err.statusCode || 500;
   let message = err.message || 'Internal Server Error';
 
-  // Mongoose duplicate key (e.g. unique email)
-  if (err.code === 11000) {
-    const field = Object.keys(err.keyValue)[0];
+  // Prisma unique constraint violation (for example, duplicate email).
+  if (err.code === 'P2002') {
+    const target = err.meta?.target;
+    const field = Array.isArray(target) ? target[0] : target || 'value';
     statusCode = 400;
     message = `${field.charAt(0).toUpperCase() + field.slice(1)} already exists`;
   }
 
-  // Mongoose validation error
-  if (err.name === 'ValidationError') {
+  // Invalid Prisma input should be reported as a client error.
+  if (err.name === 'PrismaClientValidationError') {
     statusCode = 400;
-    message = Object.values(err.errors)
-      .map((e) => e.message)
-      .join(', ');
+    message = 'Invalid request data';
   }
 
-  // Mongoose CastError (invalid ObjectId)
-  if (err.name === 'CastError') {
+  // Invalid or missing records and invalid database identifiers.
+  if (err.code === 'P2025') {
+    statusCode = 404;
+    message = 'Requested record was not found';
+  } else if (err.code === 'P2003') {
     statusCode = 400;
-    message = `Invalid ${err.path}: ${err.value}`;
+    message = 'The request references a record that does not exist';
+  } else if (err.code === 'P2023') {
+    statusCode = 400;
+    message = 'Invalid record identifier';
   }
 
   if (process.env.NODE_ENV === 'development') {

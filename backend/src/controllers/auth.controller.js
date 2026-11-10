@@ -1,7 +1,7 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { validationResult } = require('express-validator');
-const User = require('../models/User');
+const { prisma, formatDoc } = require('../prisma');
 
 // ── Helper ─────────────────────────────────────────────────────────────────────
 const signToken = (userId) =>
@@ -10,11 +10,12 @@ const signToken = (userId) =>
   });
 
 const sendAuthResponse = (user, statusCode, res) => {
-  const token = signToken(user._id);
+  const formatted = formatDoc(user);
+  const token = signToken(formatted.id);
   res.status(statusCode).json({
     success: true,
     token,
-    user,
+    user: formatted,
   });
 };
 
@@ -28,16 +29,26 @@ exports.register = async (req, res, next) => {
 
     const { name, email, password, age, gradeClass } = req.body;
 
+    const existing = await prisma.user.findUnique({ where: { email } });
+    if (existing) {
+      return res.status(400).json({
+        success: false,
+        message: 'A user with that email already exists',
+      });
+    }
+
     // Hash password
     const salt = await bcrypt.genSalt(12);
     const passwordHash = await bcrypt.hash(password, salt);
 
-    const user = await User.create({
-      name,
-      email,
-      passwordHash,
-      age: age ? parseInt(age, 10) : 8,
-      gradeClass: gradeClass || 'Class 3',
+    const user = await prisma.user.create({
+      data: {
+        name,
+        email,
+        passwordHash,
+        age: age ? parseInt(age, 10) : 8,
+        gradeClass: gradeClass || 'Class 3',
+      },
     });
 
     sendAuthResponse(user, 201, res);
@@ -56,13 +67,12 @@ exports.login = async (req, res, next) => {
 
     const { email, password } = req.body;
 
-    // Find user with passwordHash included
-    const user = await User.findOne({ email }).select('+passwordHash');
-    if (!user) {
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user || !user.passwordHash) {
       return res.status(401).json({ success: false, message: 'Invalid email or password' });
     }
 
-    const isMatch = await user.comparePassword(password);
+    const isMatch = await bcrypt.compare(password, user.passwordHash);
     if (!isMatch) {
       return res.status(401).json({ success: false, message: 'Invalid email or password' });
     }
@@ -73,17 +83,26 @@ exports.login = async (req, res, next) => {
     const yesterday = new Date(today);
     yesterday.setDate(yesterday.getDate() - 1);
 
+    let streak = user.streak;
     if (!lastActive) {
-      user.streak = 1;
+      streak = 1;
     } else if (lastActive.toDateString() === yesterday.toDateString()) {
-      user.streak += 1; // consecutive day
+      streak += 1;
     } else if (lastActive.toDateString() !== today.toDateString()) {
-      user.streak = 1; // streak broken
+      streak = 1;
     }
-    user.lastActiveDate = today;
-    await user.save({ validateBeforeSave: false });
 
-    sendAuthResponse(user, 200, res);
+    const updated = await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        streak,
+        longestStreak: Math.max(streak, user.longestStreak || 0),
+        lastActiveDate: today,
+        lastLoginAt: today,
+      },
+    });
+
+    sendAuthResponse(updated, 200, res);
   } catch (err) {
     next(err);
   }
@@ -92,8 +111,7 @@ exports.login = async (req, res, next) => {
 // ── GET /api/auth/me ───────────────────────────────────────────────────────────
 exports.getMe = async (req, res, next) => {
   try {
-    // req.user is attached by protect middleware
-    res.status(200).json({ success: true, user: req.user });
+    res.status(200).json({ success: true, user: formatDoc(req.user) });
   } catch (err) {
     next(err);
   }
@@ -108,12 +126,11 @@ exports.forgotPassword = async (req, res, next) => {
     }
 
     const { email } = req.body;
-    const user = await User.findOne({ email });
+    const user = await prisma.user.findUnique({ where: { email } });
     if (!user) {
       return res.status(404).json({ success: false, message: 'No account with that email was found.' });
     }
 
-    // In a full production app, generate token & send via nodemailer
     return res.status(200).json({
       success: true,
       message: 'Password reset link has been sent to your email address.',
@@ -133,37 +150,44 @@ exports.googleAuth = async (req, res, next) => {
 
     const { email, name, googleId, avatarUrl, age, gradeClass } = req.body;
 
-    let user = await User.findOne({ email });
+    let user = await prisma.user.findUnique({ where: { email } });
     let isNewUser = false;
 
     if (!user) {
       isNewUser = true;
-      user = await User.create({
-        name: name || email.split('@')[0],
-        email,
-        googleId: googleId || `google_${Date.now()}`,
-        avatarUrl: avatarUrl || 'assets/images/kido_character.png',
-        age: age ? parseInt(age, 10) : 8,
-        gradeClass: gradeClass || 'Class 3',
-        hasCompletedOnboarding: Boolean(age && gradeClass),
+      user = await prisma.user.create({
+        data: {
+          name: name || email.split('@')[0],
+          email,
+          googleId: googleId || `google_${Date.now()}`,
+          avatarUrl: avatarUrl || 'assets/images/kido_character.png',
+          age: age ? parseInt(age, 10) : 8,
+          gradeClass: gradeClass || 'Class 3',
+          hasCompletedOnboarding: Boolean(age && gradeClass),
+        },
       });
     } else {
-      if (googleId && !user.googleId) {
-        user.googleId = googleId;
-      }
+      const updateData = {};
+      if (googleId && !user.googleId) updateData.googleId = googleId;
       if (age && gradeClass) {
-        user.age = parseInt(age, 10);
-        user.gradeClass = gradeClass;
-        user.hasCompletedOnboarding = true;
+        updateData.age = parseInt(age, 10);
+        updateData.gradeClass = gradeClass;
+        updateData.hasCompletedOnboarding = true;
       }
-      await user.save({ validateBeforeSave: false });
+      if (Object.keys(updateData).length > 0) {
+        user = await prisma.user.update({
+          where: { id: user.id },
+          data: updateData,
+        });
+      }
     }
 
-    const token = signToken(user._id);
+    const formatted = formatDoc(user);
+    const token = signToken(formatted.id);
     res.status(200).json({
       success: true,
       token,
-      user,
+      user: formatted,
       isNewUser,
       hasCompletedOnboarding: user.hasCompletedOnboarding,
     });
@@ -176,22 +200,21 @@ exports.googleAuth = async (req, res, next) => {
 exports.completeOnboarding = async (req, res, next) => {
   try {
     const { name, age, gradeClass, avatarUrl } = req.body;
-    const user = await User.findById(req.user._id);
-    if (!user) {
-      return res.status(404).json({ success: false, message: 'User not found' });
-    }
+    const userId = req.user.id || req.user._id;
 
-    if (name) user.name = name;
-    if (age) user.age = parseInt(age, 10);
-    if (gradeClass) user.gradeClass = gradeClass;
-    if (avatarUrl) user.avatarUrl = avatarUrl;
-    user.hasCompletedOnboarding = true;
+    const data = { hasCompletedOnboarding: true };
+    if (name) data.name = name;
+    if (age) data.age = parseInt(age, 10);
+    if (gradeClass) data.gradeClass = gradeClass;
+    if (avatarUrl) data.avatarUrl = avatarUrl;
 
-    await user.save({ validateBeforeSave: false });
-    res.status(200).json({ success: true, user });
+    const user = await prisma.user.update({
+      where: { id: userId },
+      data,
+    });
+
+    res.status(200).json({ success: true, user: formatDoc(user) });
   } catch (err) {
     next(err);
   }
 };
-
-

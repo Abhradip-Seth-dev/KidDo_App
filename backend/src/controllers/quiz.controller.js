@@ -1,11 +1,5 @@
 const { validationResult } = require('express-validator');
-const QuizQuestion = require('../models/QuizQuestion');
-const QuizAttempt = require('../models/QuizAttempt');
-const User = require('../models/User');
-const SystemConfig = require('../models/SystemConfig');
-
-const IQ_PER_CORRECT = 10;
-const COINS_PER_CORRECT = 2;
+const { prisma, formatDoc } = require('../prisma');
 
 // Helper to extract numeric quiz number from string like "Quiz 1: Count to 5" or "Quiz 10"
 function parseQuizNumber(quizName) {
@@ -14,12 +8,19 @@ function parseQuizNumber(quizName) {
   return match ? parseInt(match[1], 10) : 0;
 }
 
+function getQuizStars(completedQuizzes, subject, unitNumber, quizName) {
+  if (!Array.isArray(completedQuizzes)) return 0;
+  const match = completedQuizzes.find(
+    (q) => q.subject === subject && q.unitNumber === unitNumber && q.quizName === quizName
+  );
+  return match ? match.stars : 0;
+}
+
 // ── GET /api/quiz/units?subject=Math ──────────────────────────────────────────
-// Returns all units & quizzes in a flat roadmap structure sorted numerically (Quiz 1..10)
 exports.getUnits = async (req, res, next) => {
   try {
     const { subject } = req.query;
-    const validSubjects = ['Math', 'GK', 'English', 'Computer'];
+    const validSubjects = ['Math', 'GK', 'English', 'Computer', 'Science'];
 
     if (!subject || !validSubjects.includes(subject)) {
       return res.status(400).json({
@@ -28,48 +29,53 @@ exports.getUnits = async (req, res, next) => {
       });
     }
 
-    // Aggregate: group questions by unit, then by quiz
-    const units = await QuizQuestion.aggregate([
-      { $match: { subject } },
-      {
-        $group: {
-          _id: { unitNumber: '$unitNumber', unitName: '$unitName', quizName: '$quizName' },
-          questionCount: { $sum: 1 },
-        },
-      },
-      {
-        $group: {
-          _id: { unitNumber: '$_id.unitNumber', unitName: '$_id.unitName' },
-          quizzes: {
-            $push: {
-              quizName: '$_id.quizName',
-              questionCount: '$questionCount',
-            },
-          },
-        },
-      },
-      { $sort: { '_id.unitNumber': 1 } },
-      {
-        $project: {
-          _id: 0,
-          unitNumber: '$_id.unitNumber',
-          unitName: '$_id.unitName',
-          quizzes: 1,
-        },
-      },
-    ]);
+    const questions = await prisma.quizQuestion.findMany({
+      where: { subject },
+      select: { unitNumber: true, unitName: true, quizName: true },
+    });
+
+    // Group questions by unitNumber, then by quizName
+    const unitsMap = new Map();
+    for (const q of questions) {
+      if (!unitsMap.has(q.unitNumber)) {
+        unitsMap.set(q.unitNumber, {
+          unitNumber: q.unitNumber,
+          unitName: q.unitName,
+          quizzesMap: new Map(),
+        });
+      }
+      const u = unitsMap.get(q.unitNumber);
+      if (!u.quizzesMap.has(q.quizName)) {
+        u.quizzesMap.set(q.quizName, 0);
+      }
+      u.quizzesMap.set(q.quizName, u.quizzesMap.get(q.quizName) + 1);
+    }
+
+    const units = Array.from(unitsMap.values()).map((u) => ({
+      unitNumber: u.unitNumber,
+      unitName: u.unitName,
+      quizzes: Array.from(u.quizzesMap.entries()).map(([quizName, questionCount]) => ({
+        quizName,
+        questionCount,
+      })),
+    }));
+
+    units.sort((a, b) => a.unitNumber - b.unitNumber);
 
     const user = req.user;
+    const userCompletedQuizzes = Array.isArray(user.completedQuizzes)
+      ? user.completedQuizzes
+      : (typeof user.completedQuizzes === 'string' ? JSON.parse(user.completedQuizzes || '[]') : []);
+
     let foundCurrent = false;
 
     const unitsWithProgress = units.map((unit) => {
-      // Sort quizzes numerically by Quiz number (Quiz 1 -> Quiz 2 ... -> Quiz 10)
       unit.quizzes.sort((a, b) => parseQuizNumber(a.quizName) - parseQuizNumber(b.quizName));
 
       let unitCompletedCount = 0;
 
       const quizzesWithProgress = unit.quizzes.map((quiz) => {
-        const stars = user.getQuizStars(subject, unit.unitNumber, quiz.quizName);
+        const stars = getQuizStars(userCompletedQuizzes, subject, unit.unitNumber, quiz.quizName);
         const completed = stars > 0;
         if (completed) unitCompletedCount++;
 
@@ -78,7 +84,7 @@ exports.getUnits = async (req, res, next) => {
           status = 'completed';
         } else if (!foundCurrent) {
           status = 'current';
-          foundCurrent = true; // First uncompleted quiz is the current active node
+          foundCurrent = true;
         }
 
         return {
@@ -86,7 +92,7 @@ exports.getUnits = async (req, res, next) => {
           questionCount: quiz.questionCount,
           stars,
           completed,
-          status, // 'completed' | 'current' | 'locked'
+          status,
         };
       });
 
@@ -119,24 +125,25 @@ exports.getUnits = async (req, res, next) => {
 exports.getQuestions = async (req, res, next) => {
   try {
     const { subject, unit, quiz } = req.query;
-    const validSubjects = ['Math', 'GK', 'English', 'Computer'];
+    const validSubjects = ['Math', 'GK', 'English', 'Computer', 'Science'];
 
     if (!subject || !validSubjects.includes(subject)) {
       return res.status(400).json({ success: false, message: 'Valid subject required' });
     }
 
     const filter = { subject };
-    if (unit) filter.unitNumber = parseInt(unit);
+    if (unit) filter.unitNumber = parseInt(unit, 10);
     if (quiz) filter.quizName = quiz;
 
     let questions;
     if (!unit && !quiz) {
-      questions = await QuizQuestion.aggregate([
-        { $match: filter },
-        { $sample: { size: 5 } },
-      ]);
+      const all = await prisma.quizQuestion.findMany({ where: filter });
+      questions = all.sort(() => 0.5 - Math.random()).slice(0, 5);
     } else {
-      questions = await QuizQuestion.find(filter).sort({ _id: 1 });
+      questions = await prisma.quizQuestion.findMany({
+        where: filter,
+        orderBy: { createdAt: 'asc' },
+      });
     }
 
     if (questions.length === 0) {
@@ -146,7 +153,7 @@ exports.getQuestions = async (req, res, next) => {
       });
     }
 
-    res.status(200).json({ success: true, count: questions.length, questions });
+    res.status(200).json({ success: true, count: questions.length, questions: formatDoc(questions) });
   } catch (err) {
     next(err);
   }
@@ -161,99 +168,111 @@ exports.submitAttempt = async (req, res, next) => {
     }
 
     const { subject, unitNumber, quizName, correctCount, totalQuestions } = req.body;
-    const userId = req.user._id;
+    const userId = req.user.id || req.user._id;
 
-    const percentage = (correctCount / totalQuestions) * 100;
+    const percentage = Math.round((correctCount / totalQuestions) * 100);
 
     let stars = 1;
     if (percentage >= 90) stars = 3;
     else if (percentage >= 60) stars = 2;
 
-    let baseIq = stars * 10;
+    const baseIq = stars * 10;
     const coinsEarned = stars * 5;
 
-    // Apply Live SystemConfig Multipliers (Double XP Weekend, etc.)
-    const config = await SystemConfig.findOne({ key: 'global_settings' });
+    const config = await prisma.systemConfig.findUnique({ where: { key: 'global_settings' } });
     const multiplier = config ? (config.doubleXpEnabled ? 2.0 : (config.baseXpMultiplier || 1.0)) : 1.0;
     const iqEarned = Math.round(baseIq * multiplier);
 
     // Save attempt log
-    await QuizAttempt.create({
-      userId,
-      subject,
-      unitNumber,
-      quizName,
-      stars,
-      score: percentage,
-      correctCount,
-      totalQuestions,
-      iqEarned,
-      coinsEarned,
+    await prisma.quizAttempt.create({
+      data: {
+        userId,
+        subject,
+        score: percentage,
+        correctCount,
+        totalQuestions,
+        iqEarned,
+        coinsEarned,
+      },
     });
 
-    const user = await User.findById(userId);
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    let completedQuizzes = Array.isArray(user.completedQuizzes)
+      ? [...user.completedQuizzes]
+      : (typeof user.completedQuizzes === 'string' ? JSON.parse(user.completedQuizzes || '[]') : []);
 
-    // Update existing quiz record if higher stars earned, or push new
-    const existingIndex = user.completedQuizzes.findIndex(
+    const existingIndex = completedQuizzes.findIndex(
       (q) => q.subject === subject && q.unitNumber === unitNumber && q.quizName === quizName
     );
 
     if (existingIndex > -1) {
-      if (stars > user.completedQuizzes[existingIndex].stars) {
-        user.completedQuizzes[existingIndex].stars = stars;
+      if (stars > completedQuizzes[existingIndex].stars) {
+        completedQuizzes[existingIndex].stars = stars;
       }
     } else {
-      user.completedQuizzes.push({
+      completedQuizzes.push({
         subject,
         unitNumber,
         quizName,
         stars,
         iqEarned,
         coinsEarned,
-        completedAt: new Date(),
+        completedAt: new Date().toISOString(),
       });
     }
 
-    user.iq += iqEarned;
-    user.coins += coinsEarned;
-    user.totalQuizzesCompleted += 1;
+    let iq = user.iq + iqEarned;
+    let coins = user.coins + coinsEarned;
+    const totalQuizzesCompleted = user.totalQuizzesCompleted + 1;
 
-    // ── Check Unit Mastery / Completion ────────────────────────────────────
+    // Unit completion logic
     const unitKey = `${subject}_${unitNumber}`;
     let unitCompleted = false;
     let unitBonus = { iq: 0, coins: 0 };
+    let completedUnits = [...(user.completedUnits || [])];
 
-    if (!user.completedUnits) user.completedUnits = [];
+    let currentUnitBySubject = typeof user.currentUnitBySubject === 'string'
+      ? JSON.parse(user.currentUnitBySubject || '{}')
+      : { ...(user.currentUnitBySubject || {}) };
 
-    if (!user.completedUnits.includes(unitKey)) {
-      // Find total unique quizzes in this unit from QuizQuestion
-      const totalQuizzesInUnit = await QuizQuestion.distinct('quizName', { subject, unitNumber });
-      
-      // Count completed quizzes in this unit with stars > 0
-      const completedInUnit = user.completedQuizzes.filter(
+    if (!completedUnits.includes(unitKey)) {
+      const allUnitQuestions = await prisma.quizQuestion.findMany({
+        where: { subject, unitNumber: parseInt(unitNumber, 10) },
+        select: { quizName: true },
+      });
+      const uniqueQuizzes = Array.from(new Set(allUnitQuestions.map((q) => q.quizName)));
+      const completedInUnit = completedQuizzes.filter(
         (q) => q.subject === subject && q.unitNumber === unitNumber && q.stars > 0
       );
 
-      // If user finished all quizzes in this unit
-      if (totalQuizzesInUnit.length > 0 && completedInUnit.length >= totalQuizzesInUnit.length) {
+      if (uniqueQuizzes.length > 0 && completedInUnit.length >= uniqueQuizzes.length) {
         unitCompleted = true;
         unitBonus = { iq: 50, coins: 25 };
-        user.completedUnits.push(unitKey);
-        user.iq += unitBonus.iq;
-        user.coins += unitBonus.coins;
+        completedUnits.push(unitKey);
+        iq += unitBonus.iq;
+        coins += unitBonus.coins;
 
-        // Advance unlocked unit if on current unit
-        if (user.currentUnitBySubject && user.currentUnitBySubject[subject] <= unitNumber) {
-          user.currentUnitBySubject[subject] = Math.min(10, unitNumber + 1);
+        if ((currentUnitBySubject[subject] || 1) <= unitNumber) {
+          currentUnitBySubject[subject] = Math.min(10, unitNumber + 1);
         }
       }
     }
 
-    await user.save();
+    const updatedUser = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        iq,
+        coins,
+        totalQuizzesCompleted,
+        completedQuizzes,
+        completedUnits,
+        currentUnitBySubject,
+      },
+    });
 
     res.status(201).json({
       success: true,
-      score,
+      score: percentage,
       stars,
       rewards: {
         iqEarned,
@@ -263,10 +282,10 @@ exports.submitAttempt = async (req, res, next) => {
       },
       unitCompleted,
       unitBonus,
-      nextUnitUnlocked: user.currentUnitBySubject?.[subject] || unitNumber + 1,
+      nextUnitUnlocked: currentUnitBySubject[subject] || unitNumber + 1,
       user: {
-        iq: user.iq,
-        coins: user.coins,
+        iq: updatedUser.iq,
+        coins: updatedUser.coins,
       },
     });
   } catch (err) {

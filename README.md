@@ -1,6 +1,6 @@
 # 🚀 KidDo App - Gamified Learning & Quiz Platform for Kids
 
-KidDo is an interactive, gamified learning application built with **Flutter (Frontend)** and **Node.js + Express + MongoDB (Backend)**. It combines lessons, subject quizzes, and brain-training games with a dual-currency progression system.
+KidDo is an interactive, gamified learning application built with **Flutter (Frontend)** and **Node.js + Express + PostgreSQL (Backend)**. The backend uses Prisma for database access and schema migrations. It combines lessons, subject quizzes, and brain-training games with a dual-currency progression system.
 
 ---
 
@@ -26,14 +26,17 @@ KidDo is an interactive, gamified learning application built with **Flutter (Fro
 
 ```
 KidDO_APP/
-├── backend/                  # Node.js + Express + MongoDB REST API
+├── backend/                  # Node.js + Express + PostgreSQL REST API
 │   ├── src/
 │   │   ├── controllers/      # Auth, Games, Quiz, Shop, Users controllers
-│   │   ├── models/           # Mongoose schemas (User, Level, Quiz, ShopItem)
+│   │   ├── prisma.js         # Prisma client and API response formatting
 │   │   ├── routes/           # REST API routes
 │   │   ├── middleware/       # JWT Auth verification
 │   │   ├── server.js         # Server entry point
 │   │   └── app.js            # Express app configuration
+│   ├── prisma/schema.prisma  # PostgreSQL data model
+│   ├── prisma/migrations/    # Checked-in database migrations
+│   └── docker-compose.yml    # Local PostgreSQL service
 │   └── package.json
 │
 └── kiddo_app/                # Flutter Frontend Application
@@ -60,10 +63,16 @@ KidDO_APP/
 ### 1. Backend Setup
 ```bash
 cd backend
+cp .env.example .env
+# Start the local PostgreSQL database
+docker compose up -d postgres
 npm install
-# Configure your MongoDB URI and JWT_SECRET in .env
+npm run db:deploy
+npm run seed
 npm run dev
 ```
+
+See [backend/README.md](backend/README.md) for database migration and existing database setup notes.
 
 ### 2. Frontend Setup
 ```bash

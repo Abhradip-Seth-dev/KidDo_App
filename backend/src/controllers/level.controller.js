@@ -1,4 +1,4 @@
-const LevelProgress = require('../models/LevelProgress');
+const { prisma, formatDoc } = require('../prisma');
 
 // Default level catalogue — mirrors the KidDO level design
 const DEFAULT_LEVELS = [
@@ -17,10 +17,10 @@ const DEFAULT_LEVELS = [
 // ── GET /api/levels ────────────────────────────────────────────────────────────
 exports.getLevels = async (req, res, next) => {
   try {
-    const userId = req.user._id;
+    const userId = req.user.id || req.user._id;
 
     // Get all progress records for this user
-    const progressRecords = await LevelProgress.find({ userId });
+    const progressRecords = await prisma.levelProgress.findMany({ where: { userId } });
     const progressMap = {};
     progressRecords.forEach((p) => {
       progressMap[p.levelId] = p;
@@ -36,7 +36,6 @@ exports.getLevels = async (req, res, next) => {
         status = progress.status;
         stars = progress.stars;
       } else if (index === 0) {
-        // First level always unlocked
         status = 'current';
       }
 
@@ -54,20 +53,26 @@ exports.completeLevel = async (req, res, next) => {
   try {
     const { levelId } = req.params;
     const { stars = 1 } = req.body;
-    const userId = req.user._id;
+    const userId = req.user.id || req.user._id;
 
     const clampedStars = Math.min(Math.max(parseInt(stars) || 1, 0), 3);
 
-    // Find the level in the catalogue
     const levelIndex = DEFAULT_LEVELS.findIndex((l) => l.levelId === levelId);
     if (levelIndex === -1) {
       return res.status(404).json({ success: false, message: 'Level not found' });
     }
 
     // Upsert this level's progress
-    await LevelProgress.findOneAndUpdate(
-      { userId, levelId },
-      {
+    await prisma.levelProgress.upsert({
+      where: {
+        userId_levelId: { userId, levelId },
+      },
+      update: {
+        status: 'completed',
+        stars: clampedStars,
+        completedAt: new Date(),
+      },
+      create: {
         userId,
         levelId,
         subject: DEFAULT_LEVELS[levelIndex].subject,
@@ -75,25 +80,27 @@ exports.completeLevel = async (req, res, next) => {
         stars: clampedStars,
         completedAt: new Date(),
       },
-      { upsert: true, new: true }
-    );
+    });
 
-    // Unlock the next level
+    // Unlock the next level if exists
     const nextLevel = DEFAULT_LEVELS[levelIndex + 1];
     if (nextLevel) {
-      await LevelProgress.findOneAndUpdate(
-        { userId, levelId: nextLevel.levelId },
-        {
-          $setOnInsert: {
+      const existingNext = await prisma.levelProgress.findUnique({
+        where: {
+          userId_levelId: { userId, levelId: nextLevel.levelId },
+        },
+      });
+      if (!existingNext) {
+        await prisma.levelProgress.create({
+          data: {
             userId,
             levelId: nextLevel.levelId,
             subject: nextLevel.subject,
             status: 'current',
             stars: 0,
           },
-        },
-        { upsert: true }
-      );
+        });
+      }
     }
 
     res.status(200).json({

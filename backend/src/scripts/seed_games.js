@@ -1,5 +1,5 @@
 /**
- * seed_games.js — Seeds MongoDB with:
+ * seed_games.js — Seeds PostgreSQL with:
  *  - 3 Master Game documents (Math Puzzle, Word Scramble, Memory Match)
  *  - 10 Levels of Math Puzzle (30 questions with formula lines, hints & explanations)
  *  - 10 Levels of Word Scramble (30 words with emojis & hints)
@@ -7,11 +7,7 @@
  */
 
 require('dotenv').config({ path: require('path').join(__dirname, '../../.env') });
-const mongoose = require('mongoose');
-const Game = require('../models/Game');
-const MathPuzzleLevel = require('../models/MathPuzzleLevel');
-const WordScrambleLevel = require('../models/WordScrambleLevel');
-const MemoryMatchLevel = require('../models/MemoryMatchLevel');
+const { prisma } = require('../prisma');
 
 const gamesData = [
   {
@@ -720,33 +716,37 @@ const memoryLevelsData = [
 
 async function seedGames() {
   const isStandalone = require.main === module;
-  if (isStandalone) {
-    await mongoose.connect(process.env.MONGO_URI);
-    console.log('✅ Connected to MongoDB for games seed');
-  }
 
   console.log('🎮 Seeding Games...');
-  await Game.deleteMany({});
-  await Game.insertMany(gamesData);
-  console.log(`   Added ${gamesData.length} games to 'games' table.`);
+  await prisma.game.deleteMany({});
+  for (const g of gamesData) {
+    await prisma.game.create({ data: g });
+  }
+  console.log(`   Added ${gamesData.length} games to PostgreSQL.`);
 
   console.log('🧮 Seeding Math Puzzle Levels...');
-  await MathPuzzleLevel.deleteMany({});
-  await MathPuzzleLevel.insertMany(mathLevelsData);
-  console.log(`   Added ${mathLevelsData.length} levels to 'mathpuzzlelevels' table.`);
+  await prisma.mathPuzzleLevel.deleteMany({});
+  for (const m of mathLevelsData) {
+    await prisma.mathPuzzleLevel.create({ data: m });
+  }
+  console.log(`   Added ${mathLevelsData.length} levels to PostgreSQL.`);
 
   console.log('🔤 Seeding Word Scramble Levels...');
-  await WordScrambleLevel.deleteMany({});
-  await WordScrambleLevel.insertMany(wordLevelsData);
-  console.log(`   Added ${wordLevelsData.length} levels to 'wordscramblelevels' table.`);
+  await prisma.wordScrambleLevel.deleteMany({});
+  for (const w of wordLevelsData) {
+    await prisma.wordScrambleLevel.create({ data: w });
+  }
+  console.log(`   Added ${wordLevelsData.length} levels to PostgreSQL.`);
 
   console.log('🃏 Seeding Memory Match Levels...');
-  await MemoryMatchLevel.deleteMany({});
-  await MemoryMatchLevel.insertMany(memoryLevelsData);
-  console.log(`   Added ${memoryLevelsData.length} levels to 'memorymatchlevels' table.`);
+  await prisma.memoryMatchLevel.deleteMany({});
+  for (const mem of memoryLevelsData) {
+    await prisma.memoryMatchLevel.create({ data: mem });
+  }
+  console.log(`   Added ${memoryLevelsData.length} levels to PostgreSQL.`);
 
   if (isStandalone) {
-    await mongoose.disconnect();
+    await prisma.$disconnect();
     console.log('👋 Seeding complete. Disconnected.');
   }
 }

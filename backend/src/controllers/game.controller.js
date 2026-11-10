@@ -1,10 +1,4 @@
-const Game = require('../models/Game');
-const MathPuzzleLevel = require('../models/MathPuzzleLevel');
-const WordScrambleLevel = require('../models/WordScrambleLevel');
-const MemoryMatchLevel = require('../models/MemoryMatchLevel');
-const GameProgress = require('../models/GameProgress');
-const GameAttempt = require('../models/GameAttempt');
-const User = require('../models/User');
+const { prisma, formatDoc } = require('../prisma');
 
 const STAR_REWARDS = {
   1: { iq: 10, coins: 5 },
@@ -15,8 +9,11 @@ const STAR_REWARDS = {
 // ── GET /api/games ─────────────────────────────────────────────────────────────
 exports.getGames = async (req, res, next) => {
   try {
-    const games = await Game.find({ isActive: true }).sort({ order: 1 }).lean();
-    const userId = req.user?._id;
+    const games = await prisma.game.findMany({
+      where: { isActive: true },
+      orderBy: { order: 'asc' },
+    });
+    const userId = req.user?.id || req.user?._id;
 
     const gamesWithProgress = await Promise.all(
       games.map(async (game) => {
@@ -24,9 +21,11 @@ exports.getGames = async (req, res, next) => {
         let unlockedLevels = 1;
 
         if (userId) {
-          const progressList = await GameProgress.find({
-            userId,
-            gameKey: game.gameKey,
+          const progressList = await prisma.gameProgress.findMany({
+            where: {
+              userId,
+              gameKey: game.gameKey,
+            },
           });
 
           earnedStars = progressList.reduce((acc, p) => acc + (p.stars || 0), 0);
@@ -37,7 +36,7 @@ exports.getGames = async (req, res, next) => {
         }
 
         return {
-          ...game,
+          ...formatDoc(game),
           earnedStars,
           unlockedLevels,
         };
@@ -58,24 +57,24 @@ exports.getGames = async (req, res, next) => {
 exports.getGameLevels = async (req, res, next) => {
   try {
     const { gameKey } = req.params;
-    const userId = req.user?._id;
+    const userId = req.user?.id || req.user?._id;
 
     let levels = [];
     if (gameKey === 'math_puzzle') {
-      levels = await MathPuzzleLevel.find()
-        .select('levelNumber title description icon')
-        .sort({ levelNumber: 1 })
-        .lean();
+      levels = await prisma.mathPuzzleLevel.findMany({
+        select: { id: true, levelNumber: true, title: true, description: true, icon: true },
+        orderBy: { levelNumber: 'asc' },
+      });
     } else if (gameKey === 'word_scramble') {
-      levels = await WordScrambleLevel.find()
-        .select('levelNumber title description icon')
-        .sort({ levelNumber: 1 })
-        .lean();
+      levels = await prisma.wordScrambleLevel.findMany({
+        select: { id: true, levelNumber: true, title: true, description: true, icon: true },
+        orderBy: { levelNumber: 'asc' },
+      });
     } else if (gameKey === 'memory_match') {
-      levels = await MemoryMatchLevel.find()
-        .select('levelNumber title description icon')
-        .sort({ levelNumber: 1 })
-        .lean();
+      levels = await prisma.memoryMatchLevel.findMany({
+        select: { id: true, levelNumber: true, title: true, description: true, icon: true },
+        orderBy: { levelNumber: 'asc' },
+      });
     } else {
       return res.status(404).json({ success: false, message: `Unknown gameKey: ${gameKey}` });
     }
@@ -83,7 +82,9 @@ exports.getGameLevels = async (req, res, next) => {
     // Attach user progress
     let userProgressMap = {};
     if (userId) {
-      const progressDocs = await GameProgress.find({ userId, gameKey });
+      const progressDocs = await prisma.gameProgress.findMany({
+        where: { userId, gameKey },
+      });
       progressDocs.forEach((p) => {
         userProgressMap[p.levelNumber] = p;
       });
@@ -102,7 +103,7 @@ exports.getGameLevels = async (req, res, next) => {
       const p = userProgressMap[lvl.levelNumber];
       const isUnlocked = lvl.levelNumber <= highestUnlocked || p?.isUnlocked === true;
       return {
-        ...lvl,
+        ...formatDoc(lvl),
         stars: p?.stars || 0,
         bestScore: p?.bestScore || 0,
         isCompleted: (p?.stars || 0) > 0,
@@ -128,11 +129,11 @@ exports.getLevelData = async (req, res, next) => {
 
     let levelData = null;
     if (gameKey === 'math_puzzle') {
-      levelData = await MathPuzzleLevel.findOne({ levelNumber: levelNum });
+      levelData = await prisma.mathPuzzleLevel.findUnique({ where: { levelNumber: levelNum } });
     } else if (gameKey === 'word_scramble') {
-      levelData = await WordScrambleLevel.findOne({ levelNumber: levelNum });
+      levelData = await prisma.wordScrambleLevel.findUnique({ where: { levelNumber: levelNum } });
     } else if (gameKey === 'memory_match') {
-      levelData = await MemoryMatchLevel.findOne({ levelNumber: levelNum });
+      levelData = await prisma.memoryMatchLevel.findUnique({ where: { levelNumber: levelNum } });
     } else {
       return res.status(404).json({ success: false, message: `Unknown gameKey: ${gameKey}` });
     }
@@ -147,7 +148,7 @@ exports.getLevelData = async (req, res, next) => {
     res.status(200).json({
       success: true,
       gameKey,
-      level: levelData,
+      level: formatDoc(levelData),
     });
   } catch (err) {
     next(err);
@@ -158,115 +159,146 @@ exports.getLevelData = async (req, res, next) => {
 exports.submitGameLevel = async (req, res, next) => {
   try {
     const { gameKey, levelNumber, stars, score = 0, moves = null, timeSeconds = null } = req.body;
-    const userId = req.user._id;
+    const userId = req.user.id || req.user._id;
 
     const levelNum = parseInt(levelNumber, 10);
     const starCount = Math.max(1, Math.min(3, parseInt(stars, 10) || 1));
 
     // Find previous progress
-    let progress = await GameProgress.findOne({ userId, gameKey, levelNumber: levelNum });
+    let progress = await prisma.gameProgress.findUnique({
+      where: {
+        userId_gameKey_levelNumber: {
+          userId,
+          gameKey,
+          levelNumber: levelNum,
+        },
+      },
+    });
     const prevStars = progress?.stars || 0;
 
     let iqEarned = 0;
     let coinsEarned = 0;
 
     if (!progress || prevStars === 0) {
-      // First time completion
       const reward = STAR_REWARDS[starCount] || STAR_REWARDS[1];
       iqEarned = reward.iq;
       coinsEarned = reward.coins;
     } else if (starCount > prevStars) {
-      // Star improvement: award difference
       const prevReward = STAR_REWARDS[prevStars] || { iq: 0, coins: 0 };
       const newReward = STAR_REWARDS[starCount];
       iqEarned = Math.max(0, newReward.iq - prevReward.iq);
       coinsEarned = Math.max(0, newReward.coins - prevReward.coins);
     } else {
-      // Replay practice reward
       iqEarned = 2;
       coinsEarned = 1;
     }
 
     // Upsert level progress
     if (!progress) {
-      progress = new GameProgress({
+      await prisma.gameProgress.create({
+        data: {
+          userId,
+          gameKey,
+          levelNumber: levelNum,
+          stars: starCount,
+          bestScore: score,
+          bestMoves: moves,
+          bestTimeSeconds: timeSeconds ? parseFloat(timeSeconds) : null,
+          isCompleted: true,
+          isUnlocked: true,
+          completedAt: new Date(),
+        },
+      });
+    } else {
+      const updateData = {
+        isCompleted: true,
+        completedAt: new Date(),
+      };
+      if (starCount > progress.stars) updateData.stars = starCount;
+      if (score > progress.bestScore) updateData.bestScore = score;
+      if (moves !== null && (progress.bestMoves === null || moves < progress.bestMoves)) {
+        updateData.bestMoves = moves;
+      }
+      if (timeSeconds !== null && (progress.bestTimeSeconds === null || timeSeconds < progress.bestTimeSeconds)) {
+        updateData.bestTimeSeconds = parseFloat(timeSeconds);
+      }
+      await prisma.gameProgress.update({
+        where: { id: progress.id },
+        data: updateData,
+      });
+    }
+
+    // Unlock next level (levelNumber + 1)
+    const nextLevelNum = levelNum + 1;
+    const nextProgress = await prisma.gameProgress.findUnique({
+      where: {
+        userId_gameKey_levelNumber: {
+          userId,
+          gameKey,
+          levelNumber: nextLevelNum,
+        },
+      },
+    });
+
+    if (!nextProgress) {
+      await prisma.gameProgress.create({
+        data: {
+          userId,
+          gameKey,
+          levelNumber: nextLevelNum,
+          isUnlocked: true,
+          stars: 0,
+        },
+      });
+    } else if (!nextProgress.isUnlocked) {
+      await prisma.gameProgress.update({
+        where: { id: nextProgress.id },
+        data: { isUnlocked: true },
+      });
+    }
+
+    // Log attempt history
+    await prisma.gameAttempt.create({
+      data: {
         userId,
         gameKey,
         levelNumber: levelNum,
         stars: starCount,
-        bestScore: score,
-        bestMoves: moves,
-        bestTimeSeconds: timeSeconds,
-        isCompleted: true,
-        isUnlocked: true,
-        completedAt: new Date(),
-      });
-    } else {
-      if (starCount > progress.stars) progress.stars = starCount;
-      if (score > progress.bestScore) progress.bestScore = score;
-      if (moves !== null && (progress.bestMoves === null || moves < progress.bestMoves)) {
-        progress.bestMoves = moves;
-      }
-      if (timeSeconds !== null && (progress.bestTimeSeconds === null || timeSeconds < progress.bestTimeSeconds)) {
-        progress.bestTimeSeconds = timeSeconds;
-      }
-      progress.isCompleted = true;
-      progress.completedAt = new Date();
-    }
-    await progress.save();
-
-    // Unlock next level (levelNumber + 1)
-    const nextLevelNum = levelNum + 1;
-    let nextProgress = await GameProgress.findOne({ userId, gameKey, levelNumber: nextLevelNum });
-    if (!nextProgress) {
-      nextProgress = await GameProgress.create({
-        userId,
-        gameKey,
-        levelNumber: nextLevelNum,
-        isUnlocked: true,
-        stars: 0,
-      });
-    } else if (!nextProgress.isUnlocked) {
-      nextProgress.isUnlocked = true;
-      await nextProgress.save();
-    }
-
-    // Log attempt history
-    await GameAttempt.create({
-      userId,
-      gameKey,
-      levelNumber: levelNum,
-      stars: starCount,
-      score,
-      moves,
-      timeSeconds,
-      iqEarned,
-      coinsEarned,
+        score,
+        moves,
+        timeSeconds: timeSeconds ? parseFloat(timeSeconds) : null,
+        iqEarned,
+        coinsEarned,
+      },
     });
 
     // Update user stats
-    const user = await User.findById(userId);
-    user.iq += iqEarned;
-    user.coins += coinsEarned;
-    user.totalGamesPlayed += 1;
-
-    // Daily streak check
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    let newStreak = user.streak;
     const now = new Date();
     if (user.lastActiveDate) {
       const lastActive = new Date(user.lastActiveDate);
       const diffHours = (now - lastActive) / (1000 * 60 * 60);
       if (diffHours >= 20 && diffHours < 48) {
-        user.streak += 1;
-        if (user.streak > user.longestStreak) user.longestStreak = user.streak;
+        newStreak += 1;
       } else if (diffHours >= 48) {
-        user.streak = 1;
+        newStreak = 1;
       }
     } else {
-      user.streak = 1;
+      newStreak = 1;
     }
-    user.lastActiveDate = now;
 
-    await user.save();
+    const updatedUser = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        iq: user.iq + iqEarned,
+        coins: user.coins + coinsEarned,
+        totalGamesPlayed: user.totalGamesPlayed + 1,
+        streak: newStreak,
+        longestStreak: Math.max(newStreak, user.longestStreak),
+        lastActiveDate: now,
+      },
+    });
 
     res.status(200).json({
       success: true,
@@ -277,9 +309,9 @@ exports.submitGameLevel = async (req, res, next) => {
       coinsEarned,
       nextLevelUnlocked: nextLevelNum,
       user: {
-        iq: user.iq,
-        coins: user.coins,
-        streak: user.streak,
+        iq: updatedUser.iq,
+        coins: updatedUser.coins,
+        streak: updatedUser.streak,
       },
     });
   } catch (err) {

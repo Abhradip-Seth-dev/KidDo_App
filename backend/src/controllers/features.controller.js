@@ -1,14 +1,5 @@
-const User = require('../models/User');
-const DailyChallenge = require('../models/DailyChallenge');
-const Friendship = require('../models/Friendship');
-const SocialPost = require('../models/SocialPost');
-const CoopQuest = require('../models/CoopQuest');
-const Contest = require('../models/Contest');
-const AdaptiveProfile = require('../models/AdaptiveProfile');
-const QuizQuestion = require('../models/QuizQuestion');
-const SystemConfig = require('../models/SystemConfig');
+const { prisma, formatDoc } = require('../prisma');
 
-// Helper to get today's date key YYYY-MM-DD
 function getTodayKey() {
   const d = new Date();
   return d.toISOString().split('T')[0];
@@ -20,35 +11,41 @@ function getTodayKey() {
 
 exports.getAdaptiveSuggestion = async (req, res, next) => {
   try {
-    const userId = req.user._id;
-    let profile = await AdaptiveProfile.findOne({ userId });
+    const userId = req.user.id || req.user._id;
+    let profile = await prisma.adaptiveProfile.findUnique({ where: { userId } });
 
     if (!profile) {
-      profile = await AdaptiveProfile.create({
-        userId,
-        currentAdaptiveDifficulty: 'beginner',
-        lastMascotSuggestion: {
-          title: "Welcome Adventurer!",
-          message: "Start with Math Chapter 1 to unlock cool character items and earn IQ!",
-          suggestedSubject: 'Math',
-          suggestedUnit: 1,
+      profile = await prisma.adaptiveProfile.create({
+        data: {
+          userId,
+          currentAdaptiveDifficulty: 'beginner',
+          lastMascotSuggestion: {
+            title: 'Welcome Adventurer!',
+            message: 'Start with Math Chapter 1 to unlock cool character items and earn IQ!',
+            suggestedSubject: 'Math',
+            suggestedUnit: 1,
+          },
         },
       });
     }
 
-    // Dynamic mascot advice based on weak topics or strong topics
     let mascotTitle = "You're doing fantastic! 🌟";
-    let mascotMessage = "Keep practicing every day to climb the friendly leaderboard!";
+    let mascotMessage = 'Keep practicing every day to climb the friendly leaderboard!';
     let suggestedSubject = 'Math';
-    let suggestedUnit = req.user.currentUnitBySubject?.Math || 1;
 
-    if (profile.weakTopics && profile.weakTopics.length > 0) {
-      const topWeak = profile.weakTopics[0];
+    const currentUnitBySubject = typeof req.user.currentUnitBySubject === 'string'
+      ? JSON.parse(req.user.currentUnitBySubject || '{}')
+      : (req.user.currentUnitBySubject || {});
+    let suggestedUnit = currentUnitBySubject.Math || 1;
+
+    const weakTopics = profile.weakTopics || [];
+    if (weakTopics.length > 0) {
+      const topWeak = weakTopics[0];
       mascotTitle = `Let's practice ${topWeak}! 💡`;
       mascotMessage = `I noticed you encountered a few tricky questions in ${topWeak}. Let's try some practice drills together!`;
     } else if (profile.consecutiveFastCorrect >= 3) {
-      mascotTitle = "Lightning Fast! ⚡";
-      mascotMessage = "You answered 3 questions in under 10 seconds! Scaling up to a higher difficulty challenge for extra IQ!";
+      mascotTitle = 'Lightning Fast! ⚡';
+      mascotMessage = 'You answered 3 questions in under 10 seconds! Scaling up to a higher difficulty challenge for extra IQ!';
     }
 
     res.status(200).json({
@@ -76,86 +73,103 @@ exports.getAdaptiveSuggestion = async (req, res, next) => {
 
 exports.recordAnswer = async (req, res, next) => {
   try {
-    const userId = req.user._id;
-    const { subject, topic, isCorrect, responseTimeSeconds, questionType } = req.body;
+    const userId = req.user.id || req.user._id;
+    const { subject, topic, isCorrect, responseTimeSeconds = 8.0, questionType } = req.body;
 
-    let profile = await AdaptiveProfile.findOne({ userId });
+    let profile = await prisma.adaptiveProfile.findUnique({ where: { userId } });
     if (!profile) {
-      profile = new AdaptiveProfile({ userId });
+      profile = await prisma.adaptiveProfile.create({
+        data: { userId },
+      });
     }
 
-    profile.totalQuestionsAnswered += 1;
-    if (isCorrect) profile.totalCorrectAnswered += 1;
+    let totalQuestionsAnswered = profile.totalQuestionsAnswered + 1;
+    let totalCorrectAnswered = profile.totalCorrectAnswered + (isCorrect ? 1 : 0);
 
-    // Running average of response time
-    profile.avgResponseTimeSeconds = Number(
-      ((profile.avgResponseTimeSeconds * 0.8) + (responseTimeSeconds * 0.2)).toFixed(1)
+    let avgResponseTimeSeconds = Number(
+      ((profile.avgResponseTimeSeconds * 0.8) + (parseFloat(responseTimeSeconds) * 0.2)).toFixed(1)
     );
 
     let difficultyChanged = null;
+    let consecutiveFastCorrect = profile.consecutiveFastCorrect;
+    let consecutiveIncorrect = profile.consecutiveIncorrect;
+    let currentAdaptiveDifficulty = profile.currentAdaptiveDifficulty;
+    let mistakeHistory = Array.isArray(profile.mistakeHistory)
+      ? [...profile.mistakeHistory]
+      : (typeof profile.mistakeHistory === 'string' ? JSON.parse(profile.mistakeHistory || '[]') : []);
+    let weakTopics = [...(profile.weakTopics || [])];
 
     if (isCorrect) {
-      profile.consecutiveIncorrect = 0;
+      consecutiveIncorrect = 0;
       if (responseTimeSeconds < 10) {
-        profile.consecutiveFastCorrect += 1;
-        // 3 correct in under 10s -> ramp up difficulty immediately
-        if (profile.consecutiveFastCorrect >= 3) {
-          if (profile.currentAdaptiveDifficulty === 'beginner') {
-            profile.currentAdaptiveDifficulty = 'moderate';
+        consecutiveFastCorrect += 1;
+        if (consecutiveFastCorrect >= 3) {
+          if (currentAdaptiveDifficulty === 'beginner') {
+            currentAdaptiveDifficulty = 'moderate';
             difficultyChanged = 'moderate';
-          } else if (profile.currentAdaptiveDifficulty === 'moderate') {
-            profile.currentAdaptiveDifficulty = 'hard';
+          } else if (currentAdaptiveDifficulty === 'moderate') {
+            currentAdaptiveDifficulty = 'hard';
             difficultyChanged = 'hard';
           }
         }
       }
     } else {
-      profile.consecutiveFastCorrect = 0;
-      profile.consecutiveIncorrect += 1;
+      consecutiveFastCorrect = 0;
+      consecutiveIncorrect += 1;
 
-      // 2 missed in a row -> quietly drop back to foundational concepts
-      if (profile.consecutiveIncorrect >= 2) {
-        if (profile.currentAdaptiveDifficulty === 'hard') {
-          profile.currentAdaptiveDifficulty = 'moderate';
+      if (consecutiveIncorrect >= 2) {
+        if (currentAdaptiveDifficulty === 'hard') {
+          currentAdaptiveDifficulty = 'moderate';
           difficultyChanged = 'moderate';
-        } else if (profile.currentAdaptiveDifficulty === 'moderate') {
-          profile.currentAdaptiveDifficulty = 'beginner';
+        } else if (currentAdaptiveDifficulty === 'moderate') {
+          currentAdaptiveDifficulty = 'beginner';
           difficultyChanged = 'beginner';
         }
       }
 
-      // Track weak topic & mistakes
       if (topic) {
-        const existingMistake = profile.mistakeHistory.find(
+        const existingMistake = mistakeHistory.find(
           (m) => m.subject === subject && m.topic === topic
         );
         if (existingMistake) {
           existingMistake.wrongCount += 1;
-          existingMistake.lastMistakeAt = new Date();
+          existingMistake.lastMistakeAt = new Date().toISOString();
         } else {
-          profile.mistakeHistory.push({
+          mistakeHistory.push({
             subject,
             topic,
             questionType: questionType || 'mcq',
             wrongCount: 1,
-            lastMistakeAt: new Date(),
+            lastMistakeAt: new Date().toISOString(),
           });
         }
 
-        if (!profile.weakTopics.includes(topic)) {
-          profile.weakTopics.push(topic);
+        if (!weakTopics.includes(topic)) {
+          weakTopics.push(topic);
         }
       }
     }
 
-    await profile.save();
+    await prisma.adaptiveProfile.update({
+      where: { id: profile.id },
+      data: {
+        totalQuestionsAnswered,
+        totalCorrectAnswered,
+        avgResponseTimeSeconds,
+        consecutiveFastCorrect,
+        consecutiveIncorrect,
+        currentAdaptiveDifficulty,
+        mistakeHistory,
+        weakTopics,
+      },
+    });
 
     res.status(200).json({
       success: true,
-      currentDifficulty: profile.currentAdaptiveDifficulty,
+      currentDifficulty: currentAdaptiveDifficulty,
       difficultyChanged,
-      consecutiveFastCorrect: profile.consecutiveFastCorrect,
-      consecutiveIncorrect: profile.consecutiveIncorrect,
+      consecutiveFastCorrect,
+      consecutiveIncorrect,
     });
   } catch (err) {
     next(err);
@@ -168,14 +182,19 @@ exports.recordAnswer = async (req, res, next) => {
 
 exports.getDailyChallenges = async (req, res, next) => {
   try {
-    const userId = req.user._id;
+    const userId = req.user.id || req.user._id;
     const dateKey = getTodayKey();
 
-    let challenges = await DailyChallenge.find({ userId, dateKey });
+    let challenges = await prisma.dailyChallenge.findMany({
+      where: { userId, dateKey },
+    });
 
     if (challenges.length === 0) {
-      // Procedurally generate 3 dynamic daily tasks for the student
-      const userSubject = Object.keys(req.user.currentUnitBySubject || {})[0] || 'Math';
+      const currentUnitBySubject = typeof req.user.currentUnitBySubject === 'string'
+        ? JSON.parse(req.user.currentUnitBySubject || '{}')
+        : (req.user.currentUnitBySubject || {});
+      const userSubject = Object.keys(currentUnitBySubject)[0] || 'Math';
+
       const defaultTasks = [
         {
           userId,
@@ -196,7 +215,7 @@ exports.getDailyChallenges = async (req, res, next) => {
           userId,
           dateKey,
           taskId: 'task_2',
-          taskTitle: "Daily Brain Spark",
+          taskTitle: 'Daily Brain Spark',
           description: 'Play 1 mini-game (Math Puzzle or Memory Match).',
           category: 'game',
           subject: 'General',
@@ -223,13 +242,15 @@ exports.getDailyChallenges = async (req, res, next) => {
           mascotEmoji: '👩‍🔬',
         },
       ];
-      challenges = await DailyChallenge.insertMany(defaultTasks);
+
+      await prisma.dailyChallenge.createMany({ data: defaultTasks });
+      challenges = await prisma.dailyChallenge.findMany({ where: { userId, dateKey } });
     }
 
     res.status(200).json({
       success: true,
       dateKey,
-      challenges,
+      challenges: formatDoc(challenges),
     });
   } catch (err) {
     next(err);
@@ -239,9 +260,15 @@ exports.getDailyChallenges = async (req, res, next) => {
 exports.claimChallenge = async (req, res, next) => {
   try {
     const { challengeId } = req.body;
-    const userId = req.user._id;
+    const userId = req.user.id || req.user._id;
 
-    const challenge = await DailyChallenge.findOne({ _id: challengeId, userId });
+    const challenge = await prisma.dailyChallenge.findFirst({
+      where: {
+        OR: [{ id: challengeId }, { taskId: challengeId }],
+        userId,
+      },
+    });
+
     if (!challenge) {
       return res.status(404).json({ success: false, message: 'Challenge not found' });
     }
@@ -250,7 +277,6 @@ exports.claimChallenge = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Challenge reward already claimed' });
     }
 
-    // Calculate effort-scaled reward (full if completed, proportional partial if not)
     const completionFraction = Math.min(1.0, challenge.currentCount / Math.max(1, challenge.targetCount));
     if (completionFraction < 0.3) {
       return res.status(400).json({ success: false, message: 'Need at least 30% progress to claim partial rewards' });
@@ -259,16 +285,22 @@ exports.claimChallenge = async (req, res, next) => {
     const earnedIq = Math.round(challenge.iqReward * completionFraction);
     const earnedCoins = Math.round(challenge.coinReward * completionFraction);
 
-    challenge.isClaimed = true;
-    if (completionFraction >= 1.0) {
-      challenge.isCompleted = true;
-    }
-    await challenge.save();
+    await prisma.dailyChallenge.update({
+      where: { id: challenge.id },
+      data: {
+        isClaimed: true,
+        isCompleted: completionFraction >= 1.0 ? true : challenge.isCompleted,
+      },
+    });
 
-    const user = await User.findById(userId);
-    user.iq += earnedIq;
-    user.coins += earnedCoins;
-    await user.save();
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    const updatedUser = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        iq: user.iq + earnedIq,
+        coins: user.coins + earnedCoins,
+      },
+    });
 
     res.status(200).json({
       success: true,
@@ -276,8 +308,8 @@ exports.claimChallenge = async (req, res, next) => {
       earnedCoins,
       isFullyCompleted: challenge.isCompleted,
       user: {
-        iq: user.iq,
-        coins: user.coins,
+        iq: updatedUser.iq,
+        coins: updatedUser.coins,
       },
     });
   } catch (err) {
@@ -291,11 +323,11 @@ exports.claimChallenge = async (req, res, next) => {
 
 exports.submitBossFight = async (req, res, next) => {
   try {
-    const userId = req.user._id;
+    const userId = req.user.id || req.user._id;
     const { subject, chapter, score, livesRemaining, timeTakenSeconds } = req.body;
 
-    const user = await User.findById(userId);
-    const won = livesRemaining > 0 && score >= 7; // at least 7/10 to defeat boss
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    const won = livesRemaining > 0 && score >= 7;
 
     let iqEarned = 0;
     let coinsEarned = 0;
@@ -304,44 +336,61 @@ exports.submitBossFight = async (req, res, next) => {
       iqEarned = 150 + (livesRemaining * 20);
       coinsEarned = 50 + (livesRemaining * 10);
 
-      user.iq += iqEarned;
-      user.coins += coinsEarned;
-      user.learningMinutesToday += Math.round(timeTakenSeconds / 60) || 3;
-      await user.save();
-
-      // Create a kid-safe feed post for boss defeat
-      await SocialPost.create({
-        userId,
-        userName: user.name,
-        avatarUrl: user.avatarUrl,
-        gradeClass: user.gradeClass,
-        activityType: 'boss_defeated',
-        title: `Defeated the ${subject} Boss! ⚔️`,
-        caption: `${user.name} conquered Chapter "${chapter || 'Basics'}" with ${livesRemaining} hearts remaining!`,
-        badgeEmoji: '👑',
+      await prisma.user.update({
+        where: { id: userId },
+        data: {
+          iq: user.iq + iqEarned,
+          coins: user.coins + coinsEarned,
+          learningMinutesToday: user.learningMinutesToday + (Math.round(timeTakenSeconds / 60) || 3),
+        },
       });
 
-      // Update Co-op Quest contribution
-      const quest = await CoopQuest.findOne({
-        gradeClass: user.gradeClass,
-        completed: false,
-        expiresAt: { $gte: new Date() },
+      await prisma.socialPost.create({
+        data: {
+          userId,
+          userName: user.name,
+          avatarUrl: user.avatarUrl,
+          gradeClass: user.gradeClass,
+          activityType: 'boss_defeated',
+          title: `Defeated the ${subject} Boss! ⚔️`,
+          caption: `${user.name} conquered Chapter "${chapter || 'Basics'}" with ${livesRemaining} hearts remaining!`,
+          badgeEmoji: '👑',
+        },
       });
+
+      const quest = await prisma.coopQuest.findFirst({
+        where: {
+          gradeClass: user.gradeClass,
+          completed: false,
+          expiresAt: { gte: new Date() },
+        },
+      });
+
       if (quest) {
-        quest.currentCount += 10;
-        const contributor = quest.contributors.find((c) => c.userId.toString() === userId.toString());
+        let contributors = Array.isArray(quest.contributors)
+          ? [...quest.contributors]
+          : (typeof quest.contributors === 'string' ? JSON.parse(quest.contributors || '[]') : []);
+
+        const contributor = contributors.find((c) => c.userId?.toString() === userId.toString());
         if (contributor) {
           contributor.count += 10;
         } else {
-          quest.contributors.push({ userId, userName: user.name, count: 10 });
+          contributors.push({ userId, userName: user.name, count: 10 });
         }
-        if (quest.currentCount >= quest.targetCount) {
-          quest.completed = true;
-        }
-        await quest.save();
+
+        const newCount = quest.currentCount + 10;
+        await prisma.coopQuest.update({
+          where: { id: quest.id },
+          data: {
+            currentCount: newCount,
+            completed: newCount >= quest.targetCount,
+            contributors,
+          },
+        });
       }
     }
 
+    const latestUser = await prisma.user.findUnique({ where: { id: userId } });
     res.status(200).json({
       success: true,
       won,
@@ -351,8 +400,8 @@ exports.submitBossFight = async (req, res, next) => {
       iqEarned,
       coinsEarned,
       user: {
-        iq: user.iq,
-        coins: user.coins,
+        iq: latestUser.iq,
+        coins: latestUser.coins,
       },
     });
   } catch (err) {
@@ -367,9 +416,11 @@ exports.submitBossFight = async (req, res, next) => {
 exports.getCoopQuest = async (req, res, next) => {
   try {
     const gradeClass = req.user.gradeClass || 'Class 3';
-    let quest = await CoopQuest.findOne({
-      gradeClass,
-      expiresAt: { $gte: new Date() },
+    let quest = await prisma.coopQuest.findFirst({
+      where: {
+        gradeClass,
+        expiresAt: { gte: new Date() },
+      },
     });
 
     if (!quest) {
@@ -377,26 +428,28 @@ exports.getCoopQuest = async (req, res, next) => {
       nextSunday.setDate(nextSunday.getDate() + (7 - nextSunday.getDay()));
       nextSunday.setHours(23, 59, 59, 999);
 
-      quest = await CoopQuest.create({
-        gradeClass,
-        title: `Classroom Challenge: 500 Math Problems!`,
-        description: `Team up with your ${gradeClass} classmates to solve 500 Math problems together this week to unlock the "Math Legend" profile badge!`,
-        subject: 'Math',
-        targetCount: 500,
-        currentCount: 85, // seeded initial team momentum
-        rewardBadge: '🌟 Math Legend',
-        rewardCoins: 100,
-        rewardIq: 200,
-        expiresAt: nextSunday,
-        contributors: [
-          { userId: req.user._id, userName: req.user.name, count: 15 },
-        ],
+      quest = await prisma.coopQuest.create({
+        data: {
+          gradeClass,
+          title: 'Classroom Challenge: 500 Math Problems!',
+          description: `Team up with your ${gradeClass} classmates to solve 500 Math problems together this week to unlock the "Math Legend" profile badge!`,
+          subject: 'Math',
+          targetCount: 500,
+          currentCount: 85,
+          rewardBadge: '🌟 Math Legend',
+          rewardCoins: 100,
+          rewardIq: 200,
+          expiresAt: nextSunday,
+          contributors: [
+            { userId: req.user.id || req.user._id, userName: req.user.name, count: 15 },
+          ],
+        },
       });
     }
 
     res.status(200).json({
       success: true,
-      quest,
+      quest: formatDoc(quest),
     });
   } catch (err) {
     next(err);
@@ -409,28 +462,53 @@ exports.getCoopQuest = async (req, res, next) => {
 
 exports.getFriends = async (req, res, next) => {
   try {
-    const userId = req.user._id;
+    const userId = req.user.id || req.user._id;
 
-    const friendships = await Friendship.find({
-      $or: [{ requesterId: userId }, { recipientId: userId }],
-    }).populate('requesterId recipientId', 'name email avatarUrl iq coins streak gradeClass');
+    const friendships = await prisma.friendship.findMany({
+      where: {
+        OR: [{ requesterId: userId }, { recipientId: userId }],
+      },
+    });
+
+    // Gather user IDs
+    const otherUserIds = Array.from(
+      new Set(
+        friendships.map((f) => (f.requesterId === userId ? f.recipientId : f.requesterId))
+      )
+    );
+
+    const users = await prisma.user.findMany({
+      where: { id: { in: otherUserIds } },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        avatarUrl: true,
+        iq: true,
+        coins: true,
+        streak: true,
+        gradeClass: true,
+      },
+    });
+    const userMap = new Map(users.map((u) => [u.id, formatDoc(u)]));
 
     const accepted = [];
     const pending = [];
 
     friendships.forEach((f) => {
-      const isRequester = f.requesterId._id.toString() === userId.toString();
-      const friend = isRequester ? f.recipientId : f.requesterId;
+      const isRequester = f.requesterId === userId;
+      const friendId = isRequester ? f.recipientId : f.requesterId;
+      const friend = userMap.get(friendId);
       if (!friend) return;
 
       if (f.status === 'accepted') {
         accepted.push({
-          friendshipId: f._id,
+          friendshipId: f.id,
           user: friend,
         });
       } else if (f.status === 'pending') {
         pending.push({
-          friendshipId: f._id,
+          friendshipId: f.id,
           isIncoming: !isRequester,
           user: friend,
         });
@@ -450,38 +528,45 @@ exports.getFriends = async (req, res, next) => {
 exports.sendFriendRequest = async (req, res, next) => {
   try {
     const { targetEmail } = req.body;
-    const userId = req.user._id;
+    const userId = req.user.id || req.user._id;
 
-    const targetUser = await User.findOne({ email: targetEmail.toLowerCase().trim() });
+    const targetUser = await prisma.user.findUnique({
+      where: { email: targetEmail.toLowerCase().trim() },
+    });
+
     if (!targetUser) {
       return res.status(404).json({ success: false, message: 'Student not found with this email' });
     }
 
-    if (targetUser._id.toString() === userId.toString()) {
+    if (targetUser.id === userId) {
       return res.status(400).json({ success: false, message: 'You cannot add yourself as a friend' });
     }
 
-    const existing = await Friendship.findOne({
-      $or: [
-        { requesterId: userId, recipientId: targetUser._id },
-        { requesterId: targetUser._id, recipientId: userId },
-      ],
+    const existing = await prisma.friendship.findFirst({
+      where: {
+        OR: [
+          { requesterId: userId, recipientId: targetUser.id },
+          { requesterId: targetUser.id, recipientId: userId },
+        ],
+      },
     });
 
     if (existing) {
       return res.status(400).json({ success: false, message: `Friendship is already ${existing.status}` });
     }
 
-    const friendship = await Friendship.create({
-      requesterId: userId,
-      recipientId: targetUser._id,
-      status: 'pending',
+    const friendship = await prisma.friendship.create({
+      data: {
+        requesterId: userId,
+        recipientId: targetUser.id,
+        status: 'pending',
+      },
     });
 
     res.status(201).json({
       success: true,
       message: 'Friend request sent successfully!',
-      friendship,
+      friendship: formatDoc(friendship),
     });
   } catch (err) {
     next(err);
@@ -491,23 +576,27 @@ exports.sendFriendRequest = async (req, res, next) => {
 exports.respondFriendRequest = async (req, res, next) => {
   try {
     const { friendshipId, accept } = req.body;
-    const userId = req.user._id;
+    const userId = req.user.id || req.user._id;
 
-    const friendship = await Friendship.findOne({
-      _id: friendshipId,
-      recipientId: userId,
+    const friendship = await prisma.friendship.findFirst({
+      where: {
+        id: friendshipId,
+        recipientId: userId,
+      },
     });
 
     if (!friendship) {
       return res.status(404).json({ success: false, message: 'Friend request not found' });
     }
 
-    friendship.status = accept ? 'accepted' : 'rejected';
-    await friendship.save();
+    const updated = await prisma.friendship.update({
+      where: { id: friendship.id },
+      data: { status: accept ? 'accepted' : 'rejected' },
+    });
 
     res.status(200).json({
       success: true,
-      status: friendship.status,
+      status: updated.status,
       message: accept ? 'Friend request accepted!' : 'Friend request declined.',
     });
   } catch (err) {
@@ -517,25 +606,37 @@ exports.respondFriendRequest = async (req, res, next) => {
 
 exports.getFriendlyLeaderboard = async (req, res, next) => {
   try {
-    const userId = req.user._id;
+    const userId = req.user.id || req.user._id;
 
-    const friendships = await Friendship.find({
-      $or: [{ requesterId: userId }, { recipientId: userId }],
-      status: 'accepted',
+    const friendships = await prisma.friendship.findMany({
+      where: {
+        OR: [{ requesterId: userId }, { recipientId: userId }],
+        status: 'accepted',
+      },
     });
 
     const friendIds = friendships.map((f) =>
-      f.requesterId.toString() === userId.toString() ? f.recipientId : f.requesterId
+      f.requesterId === userId ? f.recipientId : f.requesterId
     );
-    friendIds.push(userId); // include self
+    friendIds.push(userId);
 
-    const leaderboard = await User.find({ _id: { $in: friendIds } })
-      .select('name avatarUrl iq coins streak gradeClass')
-      .sort({ iq: -1 });
+    const leaderboard = await prisma.user.findMany({
+      where: { id: { in: friendIds } },
+      select: {
+        id: true,
+        name: true,
+        avatarUrl: true,
+        iq: true,
+        coins: true,
+        streak: true,
+        gradeClass: true,
+      },
+      orderBy: { iq: 'desc' },
+    });
 
     res.status(200).json({
       success: true,
-      leaderboard,
+      leaderboard: formatDoc(leaderboard),
     });
   } catch (err) {
     next(err);
@@ -548,15 +649,15 @@ exports.getFriendlyLeaderboard = async (req, res, next) => {
 
 exports.getFeed = async (req, res, next) => {
   try {
-    const posts = await SocialPost.find()
-      .sort({ createdAt: -1 })
-      .limit(30)
-      .populate('userId', 'name avatarUrl gradeClass');
+    const posts = await prisma.socialPost.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 30,
+    });
 
     res.status(200).json({
       success: true,
       hasSubscription: req.user.hasFeedSubscription,
-      posts,
+      posts: formatDoc(posts),
     });
   } catch (err) {
     next(err);
@@ -566,26 +667,30 @@ exports.getFeed = async (req, res, next) => {
 exports.likePost = async (req, res, next) => {
   try {
     const { postId } = req.body;
-    const userId = req.user._id;
+    const userId = req.user.id || req.user._id;
 
-    const post = await SocialPost.findById(postId);
+    const post = await prisma.socialPost.findUnique({ where: { id: postId } });
     if (!post) return res.status(404).json({ success: false, message: 'Post not found' });
 
-    const index = post.likes.indexOf(userId);
+    let likes = [...(post.likes || [])];
+    const index = likes.indexOf(userId);
     let isLiked = false;
     if (index > -1) {
-      post.likes.splice(index, 1);
+      likes.splice(index, 1);
     } else {
-      post.likes.push(userId);
+      likes.push(userId);
       isLiked = true;
     }
 
-    await post.save();
+    await prisma.socialPost.update({
+      where: { id: postId },
+      data: { likes },
+    });
 
     res.status(200).json({
       success: true,
       isLiked,
-      likeCount: post.likes.length,
+      likeCount: likes.length,
     });
   } catch (err) {
     next(err);
@@ -594,8 +699,8 @@ exports.likePost = async (req, res, next) => {
 
 exports.unlockFeedSubscription = async (req, res, next) => {
   try {
-    const userId = req.user._id;
-    const user = await User.findById(userId);
+    const userId = req.user.id || req.user._id;
+    const user = await prisma.user.findUnique({ where: { id: userId } });
 
     const FEED_COIN_PRICE = 100;
     if (user.coins < FEED_COIN_PRICE) {
@@ -605,17 +710,21 @@ exports.unlockFeedSubscription = async (req, res, next) => {
       });
     }
 
-    user.coins -= FEED_COIN_PRICE;
-    user.hasFeedSubscription = true;
-    await user.save();
+    const updated = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        coins: user.coins - FEED_COIN_PRICE,
+        hasFeedSubscription: true,
+      },
+    });
 
     res.status(200).json({
       success: true,
       message: 'Social Feed Pass unlocked successfully! 🎉',
       hasFeedSubscription: true,
       user: {
-        coins: user.coins,
-        iq: user.iq,
+        coins: updated.coins,
+        iq: updated.iq,
       },
     });
   } catch (err) {
@@ -630,41 +739,48 @@ exports.unlockFeedSubscription = async (req, res, next) => {
 exports.getContests = async (req, res, next) => {
   try {
     const gradeClass = req.user.gradeClass || 'Class 3';
-    let contest = await Contest.findOne({ active: true, gradeClass });
+    let contest = await prisma.contest.findFirst({
+      where: { active: true, gradeClass },
+    });
 
     if (!contest) {
-      contest = await Contest.create({
-        title: 'Monthly Math & Science Championship 🏆',
-        monthYear: 'September 2026',
-        gradeClass,
-        entryCoinCost: 20,
-        stages: [
-          { stageNumber: 1, title: 'Stage 1: Speed Arithmetic', questionCount: 10, timeLimitSeconds: 180, unlockDayOffset: 0 },
-          { stageNumber: 2, title: 'Stage 2: Pattern Master', questionCount: 10, timeLimitSeconds: 180, unlockDayOffset: 1 },
-          { stageNumber: 3, title: 'Stage 3: GK & Nature Quiz', questionCount: 10, timeLimitSeconds: 180, unlockDayOffset: 2 },
-          { stageNumber: 4, title: 'Stage 4: Logic & Riddle Battle', questionCount: 10, timeLimitSeconds: 180, unlockDayOffset: 3 },
-          { stageNumber: 5, title: 'Stage 5: Grand Final Boss Stage', questionCount: 15, timeLimitSeconds: 240, unlockDayOffset: 4 },
-        ],
-        participants: [
-          {
-            userId: req.user._id,
-            userName: req.user.name,
-            avatarUrl: req.user.avatarUrl,
-            totalScore: 40,
-            totalTimeSeconds: 110,
-            stagesCompleted: 1,
-          },
-        ],
+      contest = await prisma.contest.create({
+        data: {
+          title: 'Monthly Math & Science Championship 🏆',
+          monthYear: 'September 2026',
+          gradeClass,
+          entryCoinCost: 20,
+          stages: [
+            { stageNumber: 1, title: 'Stage 1: Speed Arithmetic', questionCount: 10, timeLimitSeconds: 180, unlockDayOffset: 0 },
+            { stageNumber: 2, title: 'Stage 2: Pattern Master', questionCount: 10, timeLimitSeconds: 180, unlockDayOffset: 1 },
+            { stageNumber: 3, title: 'Stage 3: GK & Nature Quiz', questionCount: 10, timeLimitSeconds: 180, unlockDayOffset: 2 },
+            { stageNumber: 4, title: 'Stage 4: Logic & Riddle Battle', questionCount: 10, timeLimitSeconds: 180, unlockDayOffset: 3 },
+            { stageNumber: 5, title: 'Stage 5: Grand Final Boss Stage', questionCount: 15, timeLimitSeconds: 240, unlockDayOffset: 4 },
+          ],
+          participants: [
+            {
+              userId: req.user.id || req.user._id,
+              userName: req.user.name,
+              avatarUrl: req.user.avatarUrl,
+              totalScore: 40,
+              totalTimeSeconds: 110,
+              stagesCompleted: 1,
+            },
+          ],
+        },
       });
     }
 
-    const isJoined = contest.participants.some(
-      (p) => p.userId.toString() === req.user._id.toString()
-    );
+    const participants = Array.isArray(contest.participants)
+      ? contest.participants
+      : (typeof contest.participants === 'string' ? JSON.parse(contest.participants || '[]') : []);
+
+    const currentUserId = (req.user.id || req.user._id).toString();
+    const isJoined = participants.some((p) => p.userId?.toString() === currentUserId);
 
     res.status(200).json({
       success: true,
-      contest,
+      contest: formatDoc(contest),
       isJoined,
     });
   } catch (err) {
@@ -675,13 +791,17 @@ exports.getContests = async (req, res, next) => {
 exports.joinContest = async (req, res, next) => {
   try {
     const { contestId, isAdEntry } = req.body;
-    const userId = req.user._id;
+    const userId = req.user.id || req.user._id;
 
-    const contest = await Contest.findById(contestId);
+    const contest = await prisma.contest.findUnique({ where: { id: contestId } });
     if (!contest) return res.status(404).json({ success: false, message: 'Contest not found' });
 
-    const user = await User.findById(userId);
-    const existing = contest.participants.find((p) => p.userId.toString() === userId.toString());
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    let participants = Array.isArray(contest.participants)
+      ? [...contest.participants]
+      : (typeof contest.participants === 'string' ? JSON.parse(contest.participants || '[]') : []);
+
+    const existing = participants.find((p) => p.userId?.toString() === userId.toString());
     if (existing) {
       return res.status(400).json({ success: false, message: 'Already registered for this contest' });
     }
@@ -693,11 +813,13 @@ exports.joinContest = async (req, res, next) => {
           message: `Insufficient coins. Need ${contest.entryCoinCost} Coins to register, or watch an ad.`,
         });
       }
-      user.coins -= contest.entryCoinCost;
-      await user.save();
+      await prisma.user.update({
+        where: { id: userId },
+        data: { coins: user.coins - contest.entryCoinCost },
+      });
     }
 
-    contest.participants.push({
+    participants.push({
       userId,
       userName: user.name,
       avatarUrl: user.avatarUrl,
@@ -705,12 +827,17 @@ exports.joinContest = async (req, res, next) => {
       totalTimeSeconds: 0,
       stagesCompleted: 0,
     });
-    await contest.save();
 
+    await prisma.contest.update({
+      where: { id: contestId },
+      data: { participants },
+    });
+
+    const latestUser = await prisma.user.findUnique({ where: { id: userId } });
     res.status(200).json({
       success: true,
       message: 'Successfully registered for the Championship Arena! ⚔️',
-      user: { coins: user.coins },
+      user: { coins: latestUser.coins },
     });
   } catch (err) {
     next(err);
@@ -724,11 +851,14 @@ exports.joinContest = async (req, res, next) => {
 exports.getParentMetrics = async (req, res, next) => {
   try {
     const user = req.user;
-    const profile = await AdaptiveProfile.findOne({ userId: user._id });
+    const userId = user.id || user._id;
+    const profile = await prisma.adaptiveProfile.findUnique({ where: { userId } });
 
-    // Format habit-oriented data
-    const completedQuizCount = user.completedQuizzes?.length || 0;
-    const completedUnitCount = user.completedUnits?.length || 0;
+    const completedQuizzes = Array.isArray(user.completedQuizzes)
+      ? user.completedQuizzes
+      : (typeof user.completedQuizzes === 'string' ? JSON.parse(user.completedQuizzes || '[]') : []);
+
+    const completedUnits = user.completedUnits || [];
 
     res.status(200).json({
       success: true,
@@ -741,13 +871,13 @@ exports.getParentMetrics = async (req, res, next) => {
           longestStreak: user.longestStreak || user.streak,
           learningMinutesToday: user.learningMinutesToday || 20,
           weeklyActivityMinutes: user.weeklyActivityMinutes || [15, 20, 10, 25, 30, 15, 20],
-          modulesCompleted: completedUnitCount,
-          totalQuizzesTaken: completedQuizCount,
+          modulesCompleted: completedUnits.length,
+          totalQuizzesTaken: completedQuizzes.length,
           totalGamesPlayed: user.totalGamesPlayed || 0,
         },
         strengthsAndFocus: {
-          strongTopics: profile?.strongTopics || ['Counting & Numbers', 'Basic Shapes'],
-          focusAreas: profile?.weakTopics || ['Word Scramble', 'Speed Arithmetic'],
+          strongTopics: profile?.strongTopics?.length ? profile.strongTopics : ['Counting & Numbers', 'Basic Shapes'],
+          focusAreas: profile?.weakTopics?.length ? profile.weakTopics : ['Word Scramble', 'Speed Arithmetic'],
           currentDifficultyLevel: profile?.currentAdaptiveDifficulty || 'beginner',
         },
         privacyCompliance: {
@@ -769,14 +899,19 @@ exports.getParentMetrics = async (req, res, next) => {
 exports.claimDoubleAdReward = async (req, res, next) => {
   try {
     const { baseIq, baseCoins } = req.body;
-    const user = await User.findById(req.user._id);
+    const userId = req.user.id || req.user._id;
+    const user = await prisma.user.findUnique({ where: { id: userId } });
 
     const extraIq = Math.min(100, Math.max(0, parseInt(baseIq, 10) || 10));
     const extraCoins = Math.min(50, Math.max(0, parseInt(baseCoins, 10) || 5));
 
-    user.iq += extraIq;
-    user.coins += extraCoins;
-    await user.save();
+    const updated = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        iq: user.iq + extraIq,
+        coins: user.coins + extraCoins,
+      },
+    });
 
     res.status(200).json({
       success: true,
@@ -784,8 +919,8 @@ exports.claimDoubleAdReward = async (req, res, next) => {
       extraIq,
       extraCoins,
       user: {
-        iq: user.iq,
-        coins: user.coins,
+        iq: updated.iq,
+        coins: updated.coins,
       },
     });
   } catch (err) {
@@ -795,7 +930,8 @@ exports.claimDoubleAdReward = async (req, res, next) => {
 
 exports.buyStreakFreeze = async (req, res, next) => {
   try {
-    const user = await User.findById(req.user._id);
+    const userId = req.user.id || req.user._id;
+    const user = await prisma.user.findUnique({ where: { id: userId } });
     const STREAK_FREEZE_COST = 50;
 
     if (user.coins < STREAK_FREEZE_COST) {
@@ -805,17 +941,21 @@ exports.buyStreakFreeze = async (req, res, next) => {
       });
     }
 
-    user.coins -= STREAK_FREEZE_COST;
-    user.streakFreezes = (user.streakFreezes || 0) + 1;
-    await user.save();
+    const updated = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        coins: user.coins - STREAK_FREEZE_COST,
+        streakFreezes: (user.streakFreezes || 0) + 1,
+      },
+    });
 
     res.status(200).json({
       success: true,
       message: 'Streak Freeze purchased! ❄️ Your streak is protected.',
-      streakFreezes: user.streakFreezes,
+      streakFreezes: updated.streakFreezes,
       user: {
-        coins: user.coins,
-        streakFreezes: user.streakFreezes,
+        coins: updated.coins,
+        streakFreezes: updated.streakFreezes,
       },
     });
   } catch (err) {

@@ -1,19 +1,17 @@
 require('dotenv').config({ path: require('path').join(__dirname, '../../.env') });
-const mongoose = require('mongoose');
-const User = require('../models/User');
+const { prisma, formatDoc } = require('../prisma');
 const featuresController = require('../controllers/features.controller');
 
 async function testBackendFeatures() {
   try {
-    const mongoUri = process.env.MONGO_URI || process.env.MONGODB_URI;
-    await mongoose.connect(mongoUri);
-    console.log('Connected to DB');
+    await prisma.$connect();
+    console.log('Connected to PostgreSQL via Prisma');
 
-    const user = await User.findOne({ role: 'student' }) || await User.findOne({});
+    const user = await prisma.user.findFirst();
     console.log('Testing with user:', user?.name, user?.email);
 
     // Mock Express req/res
-    const req = { user, body: {} };
+    const req = { user: formatDoc(user), body: {} };
     const res = {
       statusCode: 200,
       status(code) { this.statusCode = code; return this; },
@@ -38,11 +36,12 @@ async function testBackendFeatures() {
     console.log('\n6. Testing getParentMetrics...');
     await featuresController.getParentMetrics(req, res, (err) => console.error(err));
 
-    console.log('\n🎉 All Section 2 Backend Features Verified Successfully!');
+    console.log('\n🎉 All Section 2 Backend Features Verified Successfully on PostgreSQL!');
   } catch (err) {
     console.error('Test failed:', err);
   } finally {
-    await mongoose.connection.close();
+    await prisma.$disconnect();
+    process.exit(0);
   }
 }
 

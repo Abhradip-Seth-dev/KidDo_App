@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const User = require('../models/User');
+const { prisma, formatDoc } = require('../prisma');
 
 /**
  * Protect route middleware.
@@ -28,8 +28,10 @@ const protect = async (req, res, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
     // Attach user to request (excluding passwordHash)
-    const user = await User.findById(decoded.id);
-    if (!user) {
+    const rawUser = await prisma.user.findUnique({
+      where: { id: decoded.id },
+    });
+    if (!rawUser) {
       return res.status(401).json({
         success: false,
         message: 'The user belonging to this token no longer exists',
@@ -37,7 +39,7 @@ const protect = async (req, res, next) => {
     }
 
     // Check if user is banned
-    if (user.isBanned) {
+    if (rawUser.isBanned) {
       return res.status(403).json({
         success: false,
         message: 'Your account has been suspended. Please contact support.',
@@ -45,9 +47,9 @@ const protect = async (req, res, next) => {
     }
 
     // Check if user was forced to logout after token creation
-    if (user.forceLogoutBefore && decoded.iat) {
+    if (rawUser.forceLogoutBefore && decoded.iat) {
       const tokenIat = decoded.iat * 1000;
-      if (new Date(user.forceLogoutBefore).getTime() > tokenIat) {
+      if (new Date(rawUser.forceLogoutBefore).getTime() > tokenIat) {
         return res.status(401).json({
           success: false,
           message: 'Session invalidated by administrator. Please log in again.',
@@ -55,7 +57,7 @@ const protect = async (req, res, next) => {
       }
     }
 
-    req.user = user;
+    req.user = formatDoc(rawUser);
     next();
   } catch (err) {
     if (err.name === 'JsonWebTokenError') {
@@ -101,8 +103,8 @@ const optionalAuth = async (req, res, next) => {
 
     if (token) {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      const user = await User.findById(decoded.id);
-      if (user && !user.isBanned) req.user = user;
+      const user = await prisma.user.findUnique({ where: { id: decoded.id } });
+      if (user && !user.isBanned) req.user = formatDoc(user);
     }
     next();
   } catch (err) {

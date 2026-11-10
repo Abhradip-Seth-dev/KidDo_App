@@ -1,16 +1,15 @@
 /**
  * import_questions.js
  * Reads all 40 JSON files from the Flutter assets folder and imports them
- * into the MongoDB QuizQuestion collection.
+ * into PostgreSQL QuizQuestion table via Prisma.
  *
  * Run: node src/scripts/import_questions.js
  */
 
 require('dotenv').config({ path: require('path').join(__dirname, '../../.env') });
-const mongoose = require('mongoose');
 const fs = require('fs');
 const path = require('path');
-const QuizQuestion = require('../models/QuizQuestion');
+const { prisma } = require('../prisma');
 
 // ── Path to the Flutter JSON assets ──────────────────────────────────────────
 const JSON_BASE = path.join(
@@ -36,46 +35,44 @@ const transformQuestion = (raw, subject, unitNumber) => {
   ];
 
   const correctAnswer = raw.correct_ans ?? raw.option_1;
-  // Find index of correct option (case-insensitive trim match)
   let correctIndex = options.findIndex(
     (o) => o.trim().toLowerCase() === String(correctAnswer).trim().toLowerCase()
   );
-  if (correctIndex === -1) correctIndex = 0; // fallback
+  if (correctIndex === -1) correctIndex = 0;
 
-  // Normalize question type
   const rawType = (raw.Question_type || 'MCQ').toUpperCase();
   let type = 'MCQ';
   if (rawType === 'IMG_MCQ') type = 'IMG_MCQ';
-  else if (rawType === 'IMAGE_TAP') type = 'MCQ'; // treat as MCQ (no image assets)
+  else if (rawType === 'IMAGE_TAP') type = 'MCQ';
   else if (rawType === 'TRUE_FALSE') type = 'TRUE_FALSE';
 
   return {
     subject,
+    gradeClass: raw.Grade_class || 'Class 3',
+    chapter: raw.chapter || `Chapter ${unitNumber}`,
     unitNumber,
     unitName: raw.unit_name || `Unit ${unitNumber}`,
     quizName: raw.quiz_name || `Quiz 1`,
-    question: raw.question || '',
+    question: raw.question_text || raw.question || '',
     type,
     options,
-    correctAnswer: String(correctAnswer),
+    correctAnswer: String(correctAnswer).trim(),
     correctIndex,
-    imageAsset: raw.image || null,
-    difficulty: 'easy',
+    imageAsset: raw.image_asset || raw.image || null,
+    explanation: raw.explanation || null,
+    difficulty: (raw.difficulty || 'easy').toLowerCase(),
   };
 };
 
-// ── Main import function ───────────────────────────────────────────────────────
+// ── Main import runner ────────────────────────────────────────────────────────
 const importQuestions = async () => {
   try {
-    console.log('🌱 Connecting to MongoDB...');
-    await mongoose.connect(process.env.MONGO_URI, {
-      serverSelectionTimeoutMS: 10000,
-    });
-    console.log('✅ Connected to MongoDB Atlas\n');
+    console.log('🌱 Connecting to PostgreSQL via Prisma...');
+    await prisma.$connect();
+    console.log('✅ Connected to PostgreSQL');
 
-    // Clear existing quiz questions
-    console.log('🗑️  Clearing existing quiz questions...');
-    await QuizQuestion.deleteMany({});
+    console.log('\n🗑️  Clearing existing QuizQuestions in PostgreSQL...');
+    await prisma.quizQuestion.deleteMany({});
 
     let totalInserted = 0;
 
@@ -101,28 +98,25 @@ const importQuestions = async () => {
         );
         subjectDocs.push(...transformed);
 
-        // Count quizzes per unit
         const quizNames = [...new Set(transformed.map((q) => q.quizName))];
         console.log(
           `   Unit ${unit}: ${transformed.length} questions across ${quizNames.length} quizzes`
         );
       }
 
-      const result = await QuizQuestion.insertMany(subjectDocs);
-      totalInserted += result.length;
-      console.log(`   ✅ ${result.length} ${subject.name} questions imported`);
+      for (const doc of subjectDocs) {
+        await prisma.quizQuestion.create({ data: doc });
+      }
+      totalInserted += subjectDocs.length;
+      console.log(`   ✅ ${subjectDocs.length} ${subject.name} questions imported`);
     }
 
-    console.log(`\n🎉 Import complete! Total: ${totalInserted} questions in MongoDB`);
+    console.log(`\n🎉 Import complete! Total: ${totalInserted} questions in PostgreSQL`);
     console.log('   You can now start the server: npm run dev\n');
   } catch (err) {
     console.error('❌ Import failed:', err.message);
-    if (err.message.includes('ENOENT')) {
-      console.error('\n💡 JSON files not found. Make sure the Flutter project');
-      console.error('   is at: ../../../../kiddo_app/assets/data/json_files/\n');
-    }
   } finally {
-    await mongoose.connection.close();
+    await prisma.$disconnect();
     process.exit(0);
   }
 };
