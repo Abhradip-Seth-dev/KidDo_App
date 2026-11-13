@@ -1,5 +1,5 @@
 /**
- * seed.js — Populates MongoDB with:
+ * seed.js — Populates PostgreSQL with:
  *   - 25 quiz questions (ported from quiz_model.dart)
  *   - 7 shop items (ported from shop_item_model.dart)
  *
@@ -7,9 +7,7 @@
  */
 
 require('dotenv').config({ path: require('path').join(__dirname, '../../.env') });
-const mongoose = require('mongoose');
-const QuizQuestion = require('../models/QuizQuestion');
-const ShopItem = require('../models/ShopItem');
+const { prisma } = require('../prisma');
 
 // ── Quiz Questions ─────────────────────────────────────────────────────────────
 const quizQuestions = [
@@ -379,16 +377,14 @@ const shopItems = [
 // ── Seed Function ──────────────────────────────────────────────────────────────
 const seed = async () => {
   try {
-    console.log('🌱 Connecting to MongoDB...');
-    await mongoose.connect(process.env.MONGO_URI, {
-      serverSelectionTimeoutMS: 5000,
-    });
-    console.log('✅ Connected to MongoDB');
+    console.log('🌱 Connecting to PostgreSQL via Prisma...');
+    await prisma.$connect();
+    console.log('✅ Connected to PostgreSQL');
 
     // Clear existing data
     console.log('\n🗑️  Clearing existing quiz questions and shop items...');
-    await QuizQuestion.deleteMany({});
-    await ShopItem.deleteMany({});
+    await prisma.quizQuestion.deleteMany({});
+    await prisma.shopItem.deleteMany({});
 
     // Insert quiz questions
     console.log('📝 Seeding quiz questions...');
@@ -410,28 +406,42 @@ const seed = async () => {
         difficulty: q.difficulty || 'easy',
       };
     });
-    const insertedQuestions = await QuizQuestion.insertMany(formattedQuestions);
-    console.log(`   ✅ Inserted ${insertedQuestions.length} quiz questions`);
+    for (const q of formattedQuestions) {
+      await prisma.quizQuestion.create({ data: q });
+    }
+    console.log(`   ✅ Inserted ${formattedQuestions.length} quiz questions`);
 
     // Insert shop items
     console.log('🛒 Seeding 7 shop items...');
-    const insertedItems = await ShopItem.insertMany(shopItems);
-    console.log(`   ✅ Inserted ${insertedItems.length} shop items`);
+    for (const item of shopItems) {
+      const { _id, ...rest } = item;
+      await prisma.shopItem.create({
+        data: {
+          id: _id,
+          ...rest,
+        },
+      });
+    }
+    console.log(`   ✅ Inserted ${shopItems.length} shop items`);
 
     // Seed Admin & Content Creator Users
     console.log('👤 Seeding Administrator and Content Creator accounts...');
     const bcrypt = require('bcryptjs');
-    const User = require('../models/User');
-    const SystemConfig = require('../models/SystemConfig');
-    const BroadcastMessage = require('../models/BroadcastMessage');
 
     const adminSalt = await bcrypt.genSalt(12);
     const adminPassHash = await bcrypt.hash('Admin@123', adminSalt);
     const creatorPassHash = await bcrypt.hash('Creator@123', adminSalt);
 
-    await User.findOneAndUpdate(
-      { email: 'admin@kiddo.app' },
-      {
+    await prisma.user.upsert({
+      where: { email: 'admin@kiddo.app' },
+      update: {
+        name: 'Chief Administrator',
+        passwordHash: adminPassHash,
+        role: 'admin',
+        gradeClass: 'All',
+        hasCompletedOnboarding: true,
+      },
+      create: {
         name: 'Chief Administrator',
         email: 'admin@kiddo.app',
         passwordHash: adminPassHash,
@@ -439,12 +449,18 @@ const seed = async () => {
         gradeClass: 'All',
         hasCompletedOnboarding: true,
       },
-      { upsert: true, new: true }
-    );
+    });
 
-    await User.findOneAndUpdate(
-      { email: 'creator@kiddo.app' },
-      {
+    await prisma.user.upsert({
+      where: { email: 'creator@kiddo.app' },
+      update: {
+        name: 'Curriculum Creator',
+        passwordHash: creatorPassHash,
+        role: 'content_creator',
+        gradeClass: 'All',
+        hasCompletedOnboarding: true,
+      },
+      create: {
         name: 'Curriculum Creator',
         email: 'creator@kiddo.app',
         passwordHash: creatorPassHash,
@@ -452,15 +468,21 @@ const seed = async () => {
         gradeClass: 'All',
         hasCompletedOnboarding: true,
       },
-      { upsert: true, new: true }
-    );
+    });
     console.log('   ✅ Admin account: admin@kiddo.app / Admin@123');
     console.log('   ✅ Creator account: creator@kiddo.app / Creator@123');
 
     // Seed System Config
-    await SystemConfig.findOneAndUpdate(
-      { key: 'global_settings' },
-      {
+    await prisma.systemConfig.upsert({
+      where: { key: 'global_settings' },
+      update: {
+        doubleXpEnabled: false,
+        baseXpMultiplier: 1.0,
+        bossBattleXpMultiplier: 1.5,
+        streakReminderEnabled: true,
+        streakReminderHour: 20,
+      },
+      create: {
         key: 'global_settings',
         doubleXpEnabled: false,
         baseXpMultiplier: 1.0,
@@ -468,16 +490,17 @@ const seed = async () => {
         streakReminderEnabled: true,
         streakReminderHour: 20,
       },
-      { upsert: true, new: true }
-    );
+    });
 
     // Seed Sample Broadcast
-    await BroadcastMessage.create({
-      title: '🌟 Welcome to KidDO!',
-      message: 'New interactive lessons and math puzzle levels are now available. Keep up your daily streak!',
-      type: 'event',
-      targetClass: 'All',
-      active: true,
+    await prisma.broadcastMessage.create({
+      data: {
+        title: '🌟 Welcome to KidDO!',
+        message: 'New interactive lessons and math puzzle levels are now available. Keep up your daily streak!',
+        type: 'event',
+        targetClass: 'All',
+        active: true,
+      },
     });
 
     // Seed Games
@@ -488,14 +511,10 @@ const seed = async () => {
     console.log('   You can now start the server: npm run dev\n');
   } catch (err) {
     console.error('❌ Seeding failed:', err.message);
-    if (err.message.includes('ECONNREFUSED') || err.message.includes('connect')) {
-      console.error('\n💡 Is MongoDB running? Try:');
-      console.error('   brew services start mongodb-community\n');
-    }
   } finally {
-    await mongoose.connection.close();
+    await prisma.$disconnect();
     process.exit(0);
   }
-};
+};;
 
 seed();

@@ -17,8 +17,6 @@ class LeaderboardPage extends ConsumerStatefulWidget {
 
 class _LeaderboardPageState extends ConsumerState<LeaderboardPage> {
   int _selectedTabIndex = 0; // 0: Global, 1: Friendly Zone
-  List<dynamic> _friendlyPlayers = [];
-  bool _isLoadingFriendly = false;
 
   @override
   void initState() {
@@ -27,13 +25,9 @@ class _LeaderboardPageState extends ConsumerState<LeaderboardPage> {
   }
 
   Future<void> _loadFriendly() async {
-    setState(() => _isLoadingFriendly = true);
-    final list = await FeaturesService().getFriendlyLeaderboard();
+    await FeaturesService().getFriendlyLeaderboard();
     if (mounted) {
-      setState(() {
-        _friendlyPlayers = list;
-        _isLoadingFriendly = false;
-      });
+      setState(() {});
     }
   }
 
@@ -90,7 +84,11 @@ class _LeaderboardPageState extends ConsumerState<LeaderboardPage> {
                         child: Row(
                           children: [
                             _buildTab('Global', _selectedTabIndex == 0, 0),
-                            _buildTab('Friendly Zone', _selectedTabIndex == 1, 1),
+                            _buildTab(
+                              'Friendly Zone',
+                              _selectedTabIndex == 1,
+                              1,
+                            ),
                           ],
                         ),
                       ),

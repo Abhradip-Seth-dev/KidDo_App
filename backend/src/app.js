@@ -13,7 +13,7 @@ const shopRoutes = require('./routes/shop.routes');
 const gamesRoutes = require('./routes/games.routes');
 const adminRoutes = require('./routes/admin.routes');
 const featuresRoutes = require('./routes/features.routes');
-const BroadcastMessage = require('./models/BroadcastMessage');
+const { prisma, formatDoc } = require('./prisma');
 
 // Middleware imports
 const errorHandler = require('./middleware/errorHandler');
@@ -59,10 +59,12 @@ app.get('/api/health', (req, res) => {
 // ── Public Broadcasts Endpoint (for in-app announcements) ───────────────────────
 app.get('/api/announcements', async (req, res, next) => {
   try {
-    const active = await BroadcastMessage.find({ active: true })
-      .sort({ createdAt: -1 })
-      .limit(5);
-    res.status(200).json({ success: true, announcements: active });
+    const active = await prisma.broadcastMessage.findMany({
+      where: { active: true },
+      orderBy: { createdAt: 'desc' },
+      take: 5,
+    });
+    res.status(200).json({ success: true, announcements: formatDoc(active) });
   } catch (err) {
     next(err);
   }

@@ -1,20 +1,17 @@
 require('dotenv').config();
-const mongoose = require('mongoose');
+const { prisma } = require('./prisma');
 const app = require('./app');
 
 const PORT = process.env.PORT || 3000;
-const MONGO_URI = process.env.MONGO_URI;
 
 // ── Database Connection ────────────────────────────────────────────────────────
 const connectDB = async () => {
   try {
-    const conn = await mongoose.connect(MONGO_URI, {
-      serverSelectionTimeoutMS: 5000,
-    });
-    console.log(`✅ MongoDB connected: ${conn.connection.host}`);
+    await prisma.$connect();
+    console.log('✅ PostgreSQL connected via Prisma');
   } catch (err) {
-    console.error('❌ MongoDB connection failed:', err.message);
-    console.error('   Make sure MongoDB is running: brew services start mongodb-community');
+    console.error('❌ PostgreSQL connection failed:', err.message);
+    console.error('   Make sure PostgreSQL is running: docker compose up -d');
     process.exit(1);
   }
 };
@@ -36,13 +33,12 @@ const startServer = async () => {
   });
 
   // Graceful shutdown
-  process.on('SIGTERM', () => {
+  process.on('SIGTERM', async () => {
     console.log('👋 SIGTERM received. Shutting down gracefully...');
-    server.close(() => {
-      mongoose.connection.close(false, () => {
-        console.log('💤 Server and DB connection closed.');
-        process.exit(0);
-      });
+    server.close(async () => {
+      await prisma.$disconnect();
+      console.log('💤 Server and DB connection closed.');
+      process.exit(0);
     });
   });
 };
