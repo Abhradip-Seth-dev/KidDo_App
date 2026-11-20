@@ -9,6 +9,7 @@
     "seed": "node src/scripts/seed.js",
     "seed:features": "node src/scripts/seed_features.js",
     "seed:games": "node src/scripts/seed_games.js",
+    "seed:adaptive": "node src/scripts/seed_adaptive_curriculum.js",
     "import": "node src/scripts/import_questions.js",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",

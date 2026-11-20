@@ -13,6 +13,7 @@ const shopRoutes = require('./routes/shop.routes');
 const gamesRoutes = require('./routes/games.routes');
 const adminRoutes = require('./routes/admin.routes');
 const featuresRoutes = require('./routes/features.routes');
+const adaptiveRoutes = require('./routes/adaptive.routes');
 const { prisma, formatDoc } = require('./prisma');
 
 // Middleware imports
@@ -79,6 +80,8 @@ app.use('/api/shop', shopRoutes);
 app.use('/api/games', gamesRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/features', featuresRoutes);
+app.use('/api/v1/adaptive', adaptiveRoutes);
+app.use('/api/adaptive', adaptiveRoutes);
 
 // ── 404 Handler ────────────────────────────────────────────────────────────────
 app.use((req, res) => {

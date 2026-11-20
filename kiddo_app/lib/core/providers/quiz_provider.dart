@@ -124,8 +124,12 @@ class QuizNotifier extends StateNotifier<QuizState> {
         );
       }).toList();
 
+      final cappedQuestions = loadedQuestions.length > 15
+          ? loadedQuestions.sublist(0, 15)
+          : loadedQuestions;
+
       state = QuizState(
-        questions: loadedQuestions,
+        questions: cappedQuestions,
         isLoading: false,
       );
     } catch (e) {

@@ -135,15 +135,15 @@ exports.getQuestions = async (req, res, next) => {
     if (unit) filter.unitNumber = parseInt(unit, 10);
     if (quiz) filter.quizName = quiz;
 
-    let questions;
-    if (!unit && !quiz) {
-      const all = await prisma.quizQuestion.findMany({ where: filter });
-      questions = all.sort(() => 0.5 - Math.random()).slice(0, 5);
-    } else {
-      questions = await prisma.quizQuestion.findMany({
-        where: filter,
-        orderBy: { createdAt: 'asc' },
-      });
+    let questions = await prisma.quizQuestion.findMany({ where: filter });
+    // Randomize question delivery order to avoid static repetitive ordering
+    questions = questions.sort(() => 0.5 - Math.random());
+    // Enforce maximum 15 questions per quiz
+    if (questions.length > 15) {
+      questions = questions.slice(0, 15);
+    }
+    if (!unit && !quiz && questions.length > 5) {
+      questions = questions.slice(0, 5);
     }
 
     if (questions.length === 0) {

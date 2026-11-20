@@ -53,3 +53,9 @@ kiddo_app/ios/Flutter/app.zip
 kiddo_app/ios/Flutter/flutter_assets/
 kiddo_app/ios/ServiceDefinitions.json
 kiddo_app/ios/Runner/GeneratedPluginRegistrant.*
+
+
+# Implementation Docx AI engine
+Adaptive_Learning_System_Team_Implementation_Guide.docx
+.env
+backend/.env

@@ -38,6 +38,95 @@ class FeaturesService {
     } catch (_) {}
   }
 
+  /// Fetch all adaptive topics and student mastery
+  Future<List<Map<String, dynamic>>?> getAdaptiveTopics() async {
+    try {
+      final res = await _api.get('/adaptive/topics');
+      if (res.data['success'] == true && res.data['data'] is List) {
+        return List<Map<String, dynamic>>.from(res.data['data']);
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Start an adaptive learning session for a specific topic
+  Future<Map<String, dynamic>?> startAdaptiveSession({
+    required String topicId,
+    String? subjectId,
+  }) async {
+    try {
+      final payload = <String, dynamic>{'topicId': topicId};
+      if (subjectId != null) payload['subjectId'] = subjectId;
+      final res = await _api.post('/adaptive/sessions', data: payload);
+      if (res.data['success'] == true) {
+        return res.data['data'];
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Fetch next question from server (anti-repetition, difficulty-matched, no answer key)
+  Future<Map<String, dynamic>?> getNextAdaptiveQuestion({
+    required String sessionId,
+  }) async {
+    try {
+      final res = await _api.get('/adaptive/sessions/$sessionId/next-question');
+      if (res.data['success'] == true) {
+        if (res.data['isTopicMastered'] == true) {
+          return {'isTopicMastered': true, 'message': res.data['message']};
+        }
+        return res.data['data'];
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Submit answer to server for verification, score transaction, and adaptive progression
+  Future<Map<String, dynamic>?> submitAdaptiveAttempt({
+    required String sessionId,
+    required String questionId,
+    required String submissionId,
+    required dynamic selectedAnswer,
+    int hintsUsed = 0,
+    int durationSeconds = 0,
+  }) async {
+    try {
+      final res = await _api.post('/adaptive/attempts', data: {
+        'sessionId': sessionId,
+        'questionId': questionId,
+        'submissionId': submissionId,
+        'selectedAnswer': selectedAnswer,
+        'hintsUsed': hintsUsed,
+        'durationSeconds': durationSeconds,
+      });
+      if (res.data['success'] == true) {
+        return res.data['data'];
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Get student's adaptive progress, topic mastery, and recommendations
+  Future<Map<String, dynamic>?> getAdaptiveProgress() async {
+    try {
+      final res = await _api.get('/adaptive/progress');
+      if (res.data['success'] == true) {
+        return res.data['data'];
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   // ── Daily Challenges ────────────────────────────────────────────────────────
   Future<List<Map<String, dynamic>>> getDailyChallenges() async {
     try {

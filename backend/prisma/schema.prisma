@@ -66,6 +66,13 @@ model User {
   receivedFriendships    Friendship[] @relation("FriendshipRecipient")
   socialPosts            SocialPost[]
 
+  // Adaptive Learning System (Section 6 & 7)
+  subjectScores          StudentSubjectScore[]
+  topicMasteries         StudentTopicMastery[]
+  adaptiveSessions       LearningSession[]
+  adaptiveAttempts       QuestionAttempt[]
+  scoreTransactions      ScoreTransaction[]
+
   @@index([role])
 }
 
@@ -275,6 +282,164 @@ model AdaptiveProfile {
   updatedAt                 DateTime @updatedAt
 
   @@index([userId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 5.1 ADAPTIVE ENGINE MODELS (Sections 5, 6, 7 & 8)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model AdaptiveSubject {
+  id                String   @id @default(uuid())
+  code              String   @unique // e.g. "MATHEMATICS", "SCIENCE", "ENGLISH"
+  name              String   // e.g. "Mathematics"
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  topics            AdaptiveTopic[]
+  subjectScores     StudentSubjectScore[]
+  sessions          LearningSession[]
+  scoreTransactions ScoreTransaction[]
+
+  @@index([code, isActive])
+}
+
+model AdaptiveTopic {
+  id            String   @id @default(uuid())
+  subjectId     String
+  subject       AdaptiveSubject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  code          String   // e.g. "MULTIPLICATION", "DIVISION", "FRACTIONS"
+  name          String   // e.g. "Multiplication"
+  grade         Int      @default(3)
+  parentTopicId String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  questions     AdaptiveQuestion[]
+  masteries     StudentTopicMastery[]
+  sessions      LearningSession[]
+
+  @@unique([subjectId, code])
+  @@index([subjectId, grade])
+}
+
+model AdaptiveQuestion {
+  id             String   @id @default(uuid())
+  topicId        String
+  topic          AdaptiveTopic @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  grade          Int      @default(3)
+  difficulty     String   // "beginner" | "intermediate" | "expert"
+  questionType   String   @default("multiple_choice")
+  content        Json     // { question, options: [{ option_id, text }], media }
+  answerKey      Json     // { correct_option_id, explanation, hints: [] } (NEVER sent to client)
+  metadata       Json     @default("{}") // { tags: [], estimated_time_seconds: 30 }
+  status         String   @default("published") // "draft" | "published" | "archived"
+  contentVersion Int      @default(1)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  attempts       QuestionAttempt[]
+
+  @@index([grade, topicId, difficulty, status])
+}
+
+model StudentSubjectScore {
+  id          String   @id @default(uuid())
+  studentId   String
+  student     User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  subjectId   String
+  subject     AdaptiveSubject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  score       Int      @default(100) // Starting score 100 as per Section 1 & 4.1
+  activatedAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([studentId, subjectId])
+  @@index([studentId])
+}
+
+model StudentTopicMastery {
+  id                String   @id @default(uuid())
+  studentId         String
+  student           User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  topicId           String
+  topic             AdaptiveTopic @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  masteryValue      Float    @default(0.0) // 0.0 - 100.0%
+  evidenceCount     Int      @default(0)
+  currentDifficulty String   @default("beginner") // "beginner" | "intermediate" | "expert"
+  lastPracticedAt   DateTime @default(now())
+  formulaVersion    Int      @default(1)
+  updatedAt         DateTime @updatedAt
+
+  @@unique([studentId, topicId])
+  @@index([studentId, topicId])
+}
+
+model LearningSession {
+  id        String   @id @default(uuid())
+  studentId String
+  student   User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  subjectId String
+  subject   AdaptiveSubject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  topicId   String
+  topic     AdaptiveTopic @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  status    String   @default("in_progress") // "in_progress" | "completed" | "abandoned"
+  startedAt DateTime @default(now())
+  endedAt   DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  attempts  QuestionAttempt[]
+
+  @@index([studentId, topicId, status])
+}
+
+model QuestionAttempt {
+  id              String   @id @default(uuid())
+  submissionId    String   @unique // Client UUID idempotency key
+  sessionId       String?
+  session         LearningSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  studentId       String
+  student         User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  questionId      String
+  question        AdaptiveQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  questionVersion Int      @default(1)
+  selectedAnswer  Json     // { option_id: "B" }
+  isCorrect       Boolean
+  hintsUsed       Int      @default(0)
+  durationSeconds Int      @default(0)
+  submittedAt     DateTime @default(now())
+
+  scoreTransaction ScoreTransaction?
+
+  @@index([studentId, questionId, submittedAt])
+  @@index([studentId, sessionId])
+}
+
+model ScoreTransaction {
+  id                 String   @id @default(uuid())
+  studentId          String
+  student            User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  subjectId          String
+  subject            AdaptiveSubject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  attemptId          String?  @unique
+  attempt            QuestionAttempt? @relation(fields: [attemptId], references: [id], onDelete: SetNull)
+  pointsChange       Int
+  scoreAfter         Int
+  reason             String
+  scoringRuleVersion Int      @default(1)
+  createdAt          DateTime @default(now())
+
+  @@index([studentId, subjectId])
+}
+
+model ScoringRule {
+  id              String   @id @default(uuid())
+  difficulty      String   @unique // "beginner" | "intermediate" | "expert"
+  correctPoints   Int      // +5, +10, +15
+  incorrectPoints Int      // -2, -5, -8
+  hintPenalty     Int      @default(1)
+  version         Int      @default(1)
+  activeFrom      DateTime @default(now())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

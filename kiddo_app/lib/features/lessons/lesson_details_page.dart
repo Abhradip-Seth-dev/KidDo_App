@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:kiddo_app/core/services/api_service.dart';
+import 'package:kiddo_app/core/services/features_service.dart';
+import 'package:kiddo_app/features/quiz/adaptive_quiz_page.dart';
 import 'package:kiddo_app/features/quiz/quiz_page.dart';
 
 // ── Models ────────────────────────────────────────────────────────────────────
@@ -61,6 +63,49 @@ final quizRoadmapProvider =
 
   return roadmap;
 });
+
+// ── Helper to resolve adaptive topic per subject and unit number ─────────────
+Future<Map<String, String>?> _resolveAdaptiveTopic({
+  required String subjectName,
+  int? unitNumber,
+  String? quizName,
+}) async {
+  try {
+    final allSubjects = await FeaturesService().getAdaptiveTopics();
+    if (allSubjects == null || allSubjects.isEmpty) return null;
+
+    final normSub = subjectName.trim().toLowerCase();
+
+    final matchedSubject = allSubjects.firstWhere(
+      (s) {
+        final name = (s['subjectName'] ?? '').toString().toLowerCase();
+        final code = (s['subjectCode'] ?? '').toString().toLowerCase();
+        if (normSub == 'math' && (name.contains('math') || code.contains('math'))) return true;
+        if (normSub == 'gk' && (name.contains('knowledge') || code == 'gk')) return true;
+        if (normSub == 'science' && (name.contains('science') || code == 'science')) return true;
+        if (normSub == 'english' && (name.contains('english') || code == 'english')) return true;
+        return name.contains(normSub) || normSub.contains(name) || code.contains(normSub);
+      },
+      orElse: () => allSubjects.first,
+    );
+
+    final subTopics = (matchedSubject['topics'] as List<dynamic>?) ?? [];
+    if (subTopics.isEmpty) return null;
+
+    final unitIdx = (unitNumber != null && unitNumber > 0)
+        ? (unitNumber - 1) % subTopics.length
+        : 0;
+
+    final chosen = subTopics[unitIdx];
+    return {
+      'topicId': chosen['topicId'] as String,
+      'topicName': chosen['topicName'] as String,
+      'subjectId': matchedSubject['subjectId'] as String,
+    };
+  } catch (_) {
+    return null;
+  }
+}
 
 // ── Lesson Details Page (Full Duolingo Roadmap) ───────────────────────────────
 class LessonDetailsPage extends ConsumerStatefulWidget {
@@ -214,11 +259,20 @@ class _RoadmapListView extends StatelessWidget {
   Widget build(BuildContext context) {
     return ListView.builder(
       controller: scrollController,
-      padding: const EdgeInsets.fromLTRB(0, 20, 0, 100),
-      itemCount: nodes.length,
+      padding: const EdgeInsets.fromLTRB(0, 16, 0, 100),
+      itemCount: nodes.length + 1,
       itemBuilder: (context, index) {
-        final node = nodes[index];
-        final alignment = _getAlignment(index);
+        // First item: Adaptive AI Learning Banner
+        if (index == 0) {
+          return _AdaptiveRoadmapBanner(
+            subjectName: subjectName,
+            gradientColors: gradientColors,
+            ref: ref,
+          );
+        }
+
+        final node = nodes[index - 1];
+        final alignment = _getAlignment(index - 1);
 
         return Column(
           children: [
@@ -238,20 +292,15 @@ class _RoadmapListView extends StatelessWidget {
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 40),
                   child: GestureDetector(
-                    onTap: () async {
+                    onTap: () {
                       if (node.status != 'locked') {
-                        await Navigator.of(context, rootNavigator: true).push(
-                          MaterialPageRoute(
-                            builder: (_) => QuizPage(
-                              subjectName: subjectName,
-                              subjectColor: gradientColors[0],
-                              unitNumber: node.unitNumber,
-                              quizName: node.quizName,
-                            ),
-                          ),
+                        _showQuizChoiceModal(
+                          context,
+                          node: node,
+                          subjectName: subjectName,
+                          gradientColors: gradientColors,
+                          ref: ref,
                         );
-                        // Refresh roadmap after returning from quiz
-                        ref.invalidate(quizRoadmapProvider(subjectName));
                       } else {
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(
@@ -272,7 +321,7 @@ class _RoadmapListView extends StatelessWidget {
             ),
 
             // Connecting vertical path line
-            if (index < nodes.length - 1)
+            if (index < nodes.length)
               Align(
                 alignment: alignment,
                 child: Padding(
@@ -307,6 +356,326 @@ class _RoadmapListView extends StatelessWidget {
       Alignment.center,
     ];
     return alignments[index % alignments.length];
+  }
+
+  void _showQuizChoiceModal(
+    BuildContext context, {
+    required QuizRoadmapNode node,
+    required String subjectName,
+    required List<Color> gradientColors,
+    required WidgetRef ref,
+  }) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) {
+        return Container(
+          padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Center(
+                child: Container(
+                  width: 44,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFCBD5E1),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 18),
+              Text(
+                node.quizName,
+                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: Color(0xFF1E293B)),
+              ),
+              Text(
+                node.unitName,
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF64748B)),
+              ),
+              const SizedBox(height: 20),
+
+              // Option 1: AI Adaptive Mode
+              InkWell(
+                borderRadius: BorderRadius.circular(20),
+                onTap: () async {
+                  Navigator.pop(ctx);
+                  final target = await _resolveAdaptiveTopic(
+                    subjectName: subjectName,
+                    unitNumber: node.unitNumber,
+                    quizName: node.quizName,
+                  );
+
+                  if (context.mounted && target != null) {
+                    await Navigator.of(context, rootNavigator: true).push(
+                      MaterialPageRoute(
+                        builder: (_) => AdaptiveQuizPage(
+                          topicId: target['topicId']!,
+                          topicName: target['topicName']!,
+                          subjectId: target['subjectId'],
+                        ),
+                      ),
+                    );
+                    ref.invalidate(quizRoadmapProvider(subjectName));
+                  }
+                },
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFFEEF2FF), Color(0xFFE0E7FF)],
+                    ),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: const Color(0xFF6366F1), width: 1.8),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        height: 48,
+                        width: 48,
+                        decoration: const BoxDecoration(
+                          color: Color(0xFF6366F1),
+                          shape: BoxShape.circle,
+                        ),
+                        alignment: Alignment.center,
+                        child: const Text('⚡', style: TextStyle(fontSize: 22)),
+                      ),
+                      const SizedBox(width: 14),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Text(
+                                  'AI Adaptive Practice',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w900,
+                                    fontSize: 15,
+                                    color: Color(0xFF312E81),
+                                  ),
+                                ),
+                                SizedBox(width: 6),
+                                Text('🌟 Recommended',
+                                    style: TextStyle(fontSize: 10, color: Color(0xFF4F46E5), fontWeight: FontWeight.w800)),
+                              ],
+                            ),
+                            SizedBox(height: 3),
+                            Text(
+                              'Difficulty auto-scales · Zero question repetition',
+                              style: TextStyle(fontSize: 12, color: Color(0xFF4338CA), fontWeight: FontWeight.w500),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 12),
+
+              // Option 2: Classic Unit Quiz
+              InkWell(
+                borderRadius: BorderRadius.circular(20),
+                onTap: () async {
+                  Navigator.pop(ctx);
+                  await Navigator.of(context, rootNavigator: true).push(
+                    MaterialPageRoute(
+                      builder: (_) => QuizPage(
+                        subjectName: subjectName,
+                        subjectColor: gradientColors[0],
+                        unitNumber: node.unitNumber,
+                        quizName: node.quizName,
+                      ),
+                    ),
+                  );
+                  ref.invalidate(quizRoadmapProvider(subjectName));
+                },
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF8FAFC),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: const Color(0xFFCBD5E1), width: 1.2),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        height: 48,
+                        width: 48,
+                        decoration: const BoxDecoration(
+                          color: Color(0xFFE2E8F0),
+                          shape: BoxShape.circle,
+                        ),
+                        alignment: Alignment.center,
+                        child: const Text('📝', style: TextStyle(fontSize: 20)),
+                      ),
+                      const SizedBox(width: 14),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Classic Unit Quiz',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w800,
+                                fontSize: 15,
+                                color: Color(0xFF334155),
+                              ),
+                            ),
+                            SizedBox(height: 3),
+                            Text(
+                              'Standard fixed quiz format',
+                              style: TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+// ── Adaptive Roadmap Banner Widget ───────────────────────────────────────────
+class _AdaptiveRoadmapBanner extends StatelessWidget {
+  final String subjectName;
+  final List<Color> gradientColors;
+  final WidgetRef ref;
+
+  const _AdaptiveRoadmapBanner({
+    required this.subjectName,
+    required this.gradientColors,
+    required this.ref,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [
+              gradientColors[0].withOpacity(0.12),
+              gradientColors[1].withOpacity(0.06),
+            ],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: gradientColors[0].withOpacity(0.35), width: 1.5),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: gradientColors[0],
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Text('🧠', style: TextStyle(fontSize: 18)),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Text(
+                            'AI Adaptive Practice',
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w900,
+                              color: Color(0xFF1E293B),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: gradientColors[0],
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: const Text(
+                              'LIVE',
+                              style: TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w900),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      const Text(
+                        'Dynamic difficulty · Zero question repetition',
+                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF64748B)),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: gradientColors[0],
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      elevation: 0,
+                    ),
+                    icon: const Icon(Icons.play_arrow_rounded, size: 20),
+                    label: const Text(
+                      'Start Adaptive Drill',
+                      style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
+                    ),
+                    onPressed: () async {
+                      final target = await _resolveAdaptiveTopic(
+                        subjectName: subjectName,
+                        unitNumber: 1,
+                      );
+
+                      if (context.mounted && target != null) {
+                        await Navigator.of(context, rootNavigator: true).push(
+                          MaterialPageRoute(
+                            builder: (_) => AdaptiveQuizPage(
+                              topicId: target['topicId']!,
+                              topicName: target['topicName']!,
+                              subjectId: target['subjectId'],
+                            ),
+                          ),
+                        );
+                        ref.invalidate(quizRoadmapProvider(subjectName));
+                      }
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
