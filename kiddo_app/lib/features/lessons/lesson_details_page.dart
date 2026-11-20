@@ -419,6 +419,9 @@ class _RoadmapListView extends StatelessWidget {
                           topicId: target['topicId']!,
                           topicName: target['topicName']!,
                           subjectId: target['subjectId'],
+                          subjectName: subjectName,
+                          unitNumber: node.unitNumber,
+                          quizName: node.quizName,
                         ),
                       ),
                     );
@@ -662,6 +665,9 @@ class _AdaptiveRoadmapBanner extends StatelessWidget {
                               topicId: target['topicId']!,
                               topicName: target['topicName']!,
                               subjectId: target['subjectId'],
+                              subjectName: subjectName,
+                              unitNumber: 1,
+                              quizName: 'Quiz 1: Practice Challenge',
                             ),
                           ),
                         );

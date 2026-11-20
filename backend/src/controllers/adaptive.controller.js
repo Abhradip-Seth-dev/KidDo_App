@@ -154,6 +154,10 @@ exports.getNextSessionQuestion = async (req, res, next) => {
       where: { sessionId: session.id },
     });
     if (sessionAttemptsCount >= 15) {
+      await prisma.learningSession.update({
+        where: { id: sessionId },
+        data: { status: 'completed', endedAt: new Date() },
+      });
       return res.status(200).json({
         success: true,
         isTopicMastered: true,

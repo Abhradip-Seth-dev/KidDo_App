@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:kiddo_app/core/services/api_service.dart';
 import 'package:kiddo_app/core/services/features_service.dart';
 import 'package:kiddo_app/features/quiz/quiz_complete_page.dart';
 
@@ -6,12 +7,18 @@ class AdaptiveQuizPage extends StatefulWidget {
   final String topicId;
   final String topicName;
   final String? subjectId;
+  final String? subjectName;
+  final int? unitNumber;
+  final String? quizName;
 
   const AdaptiveQuizPage({
     super.key,
     required this.topicId,
     required this.topicName,
     this.subjectId,
+    this.subjectName,
+    this.unitNumber,
+    this.quizName,
   });
 
   @override
@@ -92,10 +99,29 @@ class _AdaptiveQuizPageState extends State<AdaptiveQuizPage> {
     }
   }
 
-  void _completePractice() {
+  Future<void> _completePractice() async {
     final accuracy = _questionsAnswered > 0
         ? ((_questionsCorrect / _questionsAnswered) * 100).round()
         : 100;
+
+    // Record quiz attempt on the roadmap so the next quiz node unlocks!
+    if (widget.unitNumber != null && widget.quizName != null) {
+      try {
+        final totalQ = _questionsAnswered > 0 ? _questionsAnswered : 1;
+        await ApiService().post('/quiz/submit', data: {
+          'subject': widget.subjectName ?? 'Math',
+          'unitNumber': widget.unitNumber,
+          'quizName': widget.quizName,
+          'correctCount': _questionsCorrect,
+          'totalQuestions': totalQ,
+        });
+      } catch (e) {
+        debugPrint('Roadmap completion sync error: $e');
+      }
+    }
+
+    if (!mounted) return;
+
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(

@@ -16,7 +16,7 @@ router.get('/questions', getQuestions);
 router.post(
   '/submit',
   [
-    body('subject').isIn(['Math', 'GK', 'English', 'Computer']).withMessage('Invalid subject'),
+    body('subject').isIn(['Math', 'GK', 'English', 'Computer', 'Science']).withMessage('Invalid subject'),
     body('unitNumber').isInt({ min: 1, max: 10 }).withMessage('unitNumber 1-10 required'),
     body('quizName').notEmpty().withMessage('quizName required'),
     body('correctCount').isInt({ min: 0 }).withMessage('correctCount required'),
