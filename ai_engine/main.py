@@ -9,7 +9,8 @@ from app.core.database import create_db_and_tables
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
+    # Startup — import models so SQLModel sees all tables
+    import app.models  # noqa: F401
     create_db_and_tables()
     from app.services.question_bank_seeder import seed_question_bank
     seed_question_bank()
@@ -38,29 +39,15 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # Routers  (imported lazily so missing modules don't break the skeleton)
 # ---------------------------------------------------------------------------
-try:
-    from app.api.routes.sessions import router as sessions_router
-    app.include_router(sessions_router, prefix="/api/v1/sessions", tags=["sessions"])
-except ImportError:
-    pass
+from app.api.routes.sessions import router as sessions_router
+from app.api.routes.attempts import router as attempts_router
+from app.api.routes.progress import router as progress_router
+from app.api.routes.questions import router as questions_router
 
-try:
-    from app.api.routes.attempts import router as attempts_router
-    app.include_router(attempts_router, prefix="/api/v1/attempts", tags=["attempts"])
-except ImportError:
-    pass
-
-try:
-    from app.api.routes.progress import router as progress_router
-    app.include_router(progress_router, prefix="/api/v1/students", tags=["progress"])
-except ImportError:
-    pass
-
-try:
-    from app.api.routes.questions import router as questions_router
-    app.include_router(questions_router, prefix="/api/v1/questions", tags=["questions"])
-except ImportError:
-    pass
+app.include_router(sessions_router, prefix="/api/v1/sessions", tags=["sessions"])
+app.include_router(attempts_router, prefix="/api/v1/attempts", tags=["attempts"])
+app.include_router(progress_router, prefix="/api/v1/students", tags=["progress"])
+app.include_router(questions_router, prefix="/api/v1/questions", tags=["questions"])
 
 
 # ---------------------------------------------------------------------------

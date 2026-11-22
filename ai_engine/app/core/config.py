@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     app_port: int = 8000
 
     # Database
-    database_url: str = "sqlite:///./ai_engine_dev.db"
+    database_url: str = "postgresql://kiddo_user:kiddo_password@localhost:5432/kiddodb"
 
     # Security
     secret_key: str = "dev-secret-key"

@@ -1,7 +1,9 @@
 from sqlmodel import SQLModel, Field
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 class Subject(SQLModel, table=True):
     __tablename__ = "subjects"
@@ -11,7 +13,7 @@ class Subject(SQLModel, table=True):
     name: str                                      # "Mathematics", "General Knowledge", etc.
     grade_class: str = Field(default="Class 3")
     is_active: bool = Field(default=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class Topic(SQLModel, table=True):
@@ -23,4 +25,4 @@ class Topic(SQLModel, table=True):
     name: str                        # "Unit 1: Number Sense"
     unit_number: int
     grade_class: str = Field(default="Class 3")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)

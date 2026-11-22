@@ -1,8 +1,10 @@
 from sqlmodel import SQLModel, Field, Column
 from sqlalchemy import JSON
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 class Question(SQLModel, table=True):
     __tablename__ = "questions"
@@ -21,4 +23,4 @@ class Question(SQLModel, table=True):
     answer_key: dict = Field(default_factory=dict, sa_column=Column(JSON))
     status: str = Field(default="published")  # draft/published/archived
     content_version: int = Field(default=1)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)

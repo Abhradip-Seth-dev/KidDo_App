@@ -1,8 +1,10 @@
 from sqlmodel import SQLModel, Field, Column
 from sqlalchemy import JSON, UniqueConstraint
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 class StudentSubjectScore(SQLModel, table=True):
     """One row per student per activated subject. Score starts at 100."""
@@ -15,8 +17,8 @@ class StudentSubjectScore(SQLModel, table=True):
     student_id: str = Field(index=True)   # UUID from Node.js User.id
     subject_id: int = Field(foreign_key="subjects.id", index=True)
     score: int = Field(default=100)        # min 0
-    activated_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    activated_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
 class StudentTopicMastery(SQLModel, table=True):
@@ -34,7 +36,7 @@ class StudentTopicMastery(SQLModel, table=True):
     current_difficulty: str = Field(default="beginner")
     last_practiced_at: Optional[datetime] = Field(default=None)
     mastery_formula_version: int = Field(default=1)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
 class LearningSession(SQLModel, table=True):
@@ -44,7 +46,7 @@ class LearningSession(SQLModel, table=True):
     student_id: str = Field(index=True)
     subject_id: int = Field(foreign_key="subjects.id")
     topic_id: int = Field(foreign_key="topics.id")
-    started_at: datetime = Field(default_factory=datetime.utcnow)
+    started_at: datetime = Field(default_factory=utc_now)
     ended_at: Optional[datetime] = Field(default=None)
     status: str = Field(default="active")  # active/completed/abandoned
     questions_served: int = Field(default=0)
@@ -65,7 +67,7 @@ class QuestionAttempt(SQLModel, table=True):
     hints_used: int = Field(default=0)
     attempt_number: int = Field(default=1)
     time_taken_seconds: Optional[int] = Field(default=None)
-    submitted_at: datetime = Field(default_factory=datetime.utcnow)
+    submitted_at: datetime = Field(default_factory=utc_now)
 
 
 class ScoreTransaction(SQLModel, table=True):
@@ -80,7 +82,7 @@ class ScoreTransaction(SQLModel, table=True):
     score_after: int
     reason: str    # "correct_beginner_answer", "incorrect_expert_answer", "hint_penalty"
     scoring_rule_version: int = Field(default=1)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class ScoringRule(SQLModel, table=True):
@@ -94,4 +96,4 @@ class ScoringRule(SQLModel, table=True):
     hint_penalty: int = Field(default=1)
     version: int = Field(default=1)
     is_active: bool = Field(default=True)
-    active_from: datetime = Field(default_factory=datetime.utcnow)
+    active_from: datetime = Field(default_factory=utc_now)
